@@ -1,0 +1,5 @@
+self-hosted-runner:
+  # Custom label pinning CI to the runner that carries Python and an
+  # authenticated claude CLI (see ci.yml).
+  labels:
+    - opulent-ci

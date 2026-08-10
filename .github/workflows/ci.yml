@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # GitHub-hosted, and that is the whole point. This repo is public, so a
+  # pull_request run executes a stranger's code; no self-hosted runner serves a
+  # public repository, which is why no job in this file names one. Nothing here
+  # needs credentials either — the hooks are self-contained Python and the gate
+  # only reads git, so a throwaway VM is not a compromise but the right home.
+  # The live end-to-end tier does need an authenticated claude CLI, so it is not
+  # part of this repo's CI at all: it runs from the private companion's CI, by
+  # manual dispatch, against a checkout of this repo's main.
+  selftests:
+    name: Hook self-tests + public hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # public_gate.py scans the whole object database. The default
+          # single-commit fetch is not that, and the gate refuses to pretend
+          # a shallow clone cleared a history it never read.
+          fetch-depth: 0
+      # No setup-python: the runner image ships Python 3. Steps stay plain
+      # invocations — no pipes, heredocs or shell-isms — so the suite runs the
+      # same way here as it does in a contributor's terminal.
+      - name: Show runner Python
+        run: python3 --version
+      - name: Routing hook self-test
+        run: python3 tests/hook_selftest.py
+      - name: Marketplace members + session-start checks
+        run: python3 tests/ci_checks.py
+      - name: Public-gate self-test
+        run: python3 tests/gate_selftest.py
+      - name: Public-hygiene gate
+        run: python3 tests/public_gate.py
+        env:
+          # Identity terms cannot be stored in the gate — the term text is the
+          # leak — so they arrive here. Absent on a fork's pull_request run,
+          # where the gate prints the skip rather than failing.
+          PUBLIC_GATE_PRIVATE_TERMS: ${{ secrets.PUBLIC_GATE_PRIVATE_TERMS }}
