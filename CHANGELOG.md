@@ -10,6 +10,11 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.11.1 — 2026-08-09
+
+**Metadata refresh.** Version bump only, so installed copies re-fetch the
+scrubbed plugin metadata. No behavior change.
+
 ## opulent 0.11.0 — 2026-08-09
 
 **Standing alone.** lens-master moves to its own private repo; this repo now
