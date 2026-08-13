@@ -72,6 +72,17 @@ reads the `deny` event out of the routing log, which only the hook can write.
 The suite gained 24 cases and both self-tests take a path override, so they
 can be pointed at an older copy and watched to fail.
 
+**CI now scans the commit under review, not the merge invented to test it.**
+The stricter gate found its first live target immediately: on a
+`pull_request` event `actions/checkout` defaults to `refs/pull/N/merge`, a
+synthetic commit GitHub authors with the PR author's own account, so it
+carries an identity the branch itself does not. Reading committer as well as
+author — new in this release — that object fails a branch which is clean.
+The merge is a CI artifact, never pushed and never reachable from main, so
+the checkout now pins the head SHA and the gate answers the question with a
+stable answer. Also bumps `actions/checkout` to v5, clearing the Node 20
+deprecation warning.
+
 **Descriptions that had been false since 0.9.0.** Four agent files still told
 users "the main loop cannot edit source files" / "cannot run these directly",
 which 0.9.0 stopped being true and the README already contradicted. They now

@@ -26,6 +26,20 @@ jobs:
           # single-commit fetch is not that, and the gate refuses to pretend
           # a shallow clone cleared a history it never read.
           fetch-depth: 0
+          # The commit under review, NOT the merge GitHub invents to test it.
+          # On a pull_request event the default checkout is refs/pull/N/merge,
+          # a synthetic commit GitHub authors with the PR author's own account
+          # — so it carries an identity the branch itself does not, and since
+          # 0.11.2 the gate reads committer and author on every commit object
+          # and correctly fails a clean branch over it. That merge is a CI
+          # artifact: it is never pushed, never reachable from main, and never
+          # published. Scanning the head asks the question that has a stable
+          # answer — "is what we are about to merge publishable?"
+          #
+          # Safe here because this is `pull_request`, not
+          # `pull_request_target`: a fork PR gets no secrets, so checking out
+          # its head grants a contributor nothing the merge ref would not.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       # No setup-python: the runner image ships Python 3. Steps stay plain
       # invocations — no pipes, heredocs or shell-isms — so the suite runs the
       # same way here as it does in a contributor's terminal.
