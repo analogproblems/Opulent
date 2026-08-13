@@ -3,7 +3,7 @@
 and keep delegation pointed at real lanes. Subagent calls (payload contains
 agent_id) are always allowed. Fail-open: any parse error or unexpected
 payload shape allows the call. This is a seatbelt with an audit trail, not a
-security boundary — see the README's "What enforcement is — and isn't".
+security boundary — see the README's "Enforcement & Honesty" section.
 
 Until 0.9.0 this hook denied every main-loop file write and test run, to
 force delegation. That was the wrong instrument for the cost: a one-line
@@ -23,11 +23,14 @@ Eco mode: set OPULENT_ECO=1 and complex implementation runs one effort rung
 down — this hook then denies `opulent:coder` with a redirect to the
 `opulent:coder-eco` twin (same model and charter, effort xhigh). Both dials are
 read from the environment, so both are session-granular.
-Telemetry: main-loop edits, test runs, delegations and denials each append one
-JSON line to ~/.claude/opulent-log.jsonl (override path with OPULENT_LOG)."""
+Telemetry: main-loop edits, test runs, removals, delegations and denials each
+append one JSON line to ~/.claude/opulent-log.jsonl (override path with
+OPULENT_LOG). Lines carry the payload's session id (first 8 chars) when one
+was sent, and every path in a detail is recorded resolved and absolute."""
 import datetime
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -35,13 +38,34 @@ import tempfile
 
 HOME = os.path.expanduser("~")
 LOG_PATH = os.environ.get("OPULENT_LOG") or os.path.join(HOME, ".claude", "opulent-log.jsonl")
+# `~` and relative spellings are honored and anchored to HOME, not to the
+# hook process's cwd: `OPULENT_LOG=~/logs/op.jsonl` used to write nothing,
+# silently — open() does not expand `~` — while the self-guard below compared
+# against the unexpanded string.
+LOG_PATH = os.path.expanduser(LOG_PATH)
+if not os.path.isabs(LOG_PATH):
+    LOG_PATH = os.path.join(HOME, LOG_PATH)
+# The log guards itself below — except when it is os.devnull, which means
+# "no log": guarding that would deny every harmless `> /dev/null`.
+_LOG_NORM = os.path.normpath(LOG_PATH)
+_LOG_GUARDED = _LOG_NORM not in (os.devnull, "/dev/null")
+
+# Session attribution for log lines: set once in main() from the payload.
+# Empty (and omitted from the line) when the payload names no session, so
+# concurrent sessions stay distinguishable without inventing an id.
+_SID = ""
 
 
 def _log(event, detail):
     try:
         with open(LOG_PATH, "a") as f:
             ts = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
-            f.write(json.dumps({"t": ts, "event": event, "detail": str(detail)[:120]}) + "\n")
+            entry = {"t": ts, "event": event, "detail": str(detail)[:120]}
+            if _SID:
+                entry["sid"] = _SID
+            # One write() per line, kept well under PIPE_BUF, so concurrent
+            # sessions appending to one log cannot tear each other's lines.
+            f.write(json.dumps(entry) + "\n")
     except OSError:
         pass
 
@@ -64,19 +88,37 @@ def deny(reason, detail=None, event="deny"):
 # Match test/build/lint tools only at command position so commands that merely
 # *mention* a tool name are not recorded as runs. These are no longer denied —
 # the pattern now decides what gets an audit line, not what gets refused.
+# Searched against a copy of the command with quoted spans blanked and heredoc
+# bodies stripped (see main), so `git commit -m "…; npm test"` fabricates
+# nothing; the raw command is searched only when it cannot be parsed at all.
 TEST_RE = re.compile(
-    r"(?:^|[;&|(]\s*|\bthen\s+|\bdo\s+)"          # command position
+    r"(?:^\s*|[;&|({`]\s*|\bthen\s+|\bdo\s+)"      # command position
     r"(?:\w+=\S*\s+)*"                             # env-var prefixes: CI=1 ...
-    r"(?:sudo\s+|command\s+|time\s+|npx\s+|bunx\s+|uv\s+run\s+|python3?\s+-m\s+)*"
+    r"(?:sudo\s+|command\s+|time\s+|npx\s+|bunx\s+|uv\s+run\s+|python3?\s+-m\s+|"
+    # timeout takes options before its duration (`timeout -k 5 30 pytest`);
+    # both repetitions are bounded so the engine cannot spin on them.
+    r"(?:poetry|pipenv|pdm|hatch)\s+run\s+|pnpm\s+exec\s+|"
+    r"timeout\s+(?:--?[\w-]+(?:=\S+)?\s+){0,4}(?:[\w.]+\s+){1,3}|"
+    r"nohup\s+|stdbuf\s+\S+\s+)*"
     r"(?:[\w@./-]*/)?"                             # path prefixes: ./gradlew
     r"(?:pytest|vitest|jest|playwright\s+test|cargo\s+(?:test|nextest)|go\s+test|"
     r"bun\s+test|phpunit|rspec|tox|ctest|dotnet\s+test|mvn\s+(?:test|verify)|"
-    r"gradlew?\s+test|(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|build)(?![\w-])|"
-    r"make\s+(?:test|check)(?![\w-])|tsc|eslint|ruff|mypy)\b",
+    # (?!\w), not (?![\w-]): `npm run test-e2e` is a test script and must
+    # match, while the bare tools below refuse a hyphen so `tsc-watch` and
+    # `eslint-config-x` are not read as runs of the tool they resemble.
+    r"gradlew?\s+test|(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:test|lint|typecheck|build)(?!\w)|"
+    r"make\s+(?:test|check)(?![\w-])|(?:tsc|eslint|ruff|mypy)(?![\w-]))\b",
     re.M)
 
-# `tsc --version` is a lookup, not a build — not worth an audit line.
-VERSION_RE = re.compile(r"\s--(?:version|help)\b")
+# Quoted spans, blanked before TEST_RE runs: a tool name inside a commit
+# message or a grep pattern is a mention, not a run. Known limit: this also
+# blanks `bash -c '…'` payloads, so a test run quoted inside one goes
+# unrecorded — the fabrication this kills costs more than that miss.
+_QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+# Comment spans, blanked after the quotes: `# if it fails then npm test` is
+# advice, not a run. Quotes go first, so a quoted `#` never opens one.
+_COMMENT_RE = re.compile(r"(?m)(?:^|\s)#[^\n]*")
 
 # Catch-all agents have full tools and inherit the session model; delegating
 # to them satisfies "delegation" while defeating "routing".
@@ -91,39 +133,80 @@ CATCHALL_AGENTS = {"general-purpose", "claude"}
 ECO_LANE = "opulent:coder"
 ECO_TWIN = "opulent:coder-eco"
 
-_OPERATORS = {";", "|", "||", "&&", "&", "(", ")"}
-_REDIRECTS = {">", ">>", ">|", "&>", "&>>"}
+_OPERATORS = {";", "|", "||", "&&", "&", "(", ")", ";;", ";&", ";;&"}
+_REDIRECTS = {">", ">>", ">|", "&>", "&>>", ">&"}
 # `<` feeds a file INTO a command and is never a write target — putting it in
 # _REDIRECTS would make `sort < settings.json` look like a rewrite of it. It
 # is recognised here only because `patch -p1 < f.patch` names its patch file
 # no other way, and because it ends a command's argument list.
 _INPUT_REDIRECT = "<"
-_CMD_PREFIXES = {"sudo", "command", "time", "env", "xargs", "nice"}
+_CMD_PREFIXES = {"sudo", "command", "time", "env", "xargs", "nice",
+                 "timeout", "nohup", "setsid", "stdbuf"}
+
+# Shell reserved words are not commands: `do cp …` runs cp. They are skipped
+# WITHOUT leaving command position, which is what lets the writer inside a
+# `for`/`if`/`{ }` compound be judged instead of hiding behind the keyword.
+_RESERVED = {"if", "then", "elif", "else", "fi", "for", "while", "until",
+             "do", "done", "case", "esac", "!", "{", "}"}
 
 # Which of a prefix's own options carry a separate value. Per prefix, because
 # the same letter means different things: `nice -n 10` consumes its operand
 # and `sudo -n` does not, so one shared table would either swallow the wrapped
 # command or leave a stray operand sitting at command position.
 _PREFIX_VALUE_OPTS = {
-    "sudo": {"-u", "-g", "-p", "-C", "-h", "-r", "-t", "-U"},
+    "sudo": {"-u", "-g", "-p", "-C", "-h", "-r", "-t", "-U", "-R", "-D",
+             "--user", "--group", "--chroot", "--chdir", "--prompt",
+             "--role", "--type", "--host", "--close-from"},
     "nice": {"-n", "--adjustment"},
     "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
-    "xargs": {"-I", "-i", "-n", "-P", "-d", "-E", "-L", "-s",
-              "--replace", "--max-args", "--max-procs", "--delimiter"},
+    "xargs": {"-I", "-i", "-n", "-P", "-d", "-E", "-L", "-s", "-a",
+              "--replace", "--max-args", "--max-procs", "--delimiter",
+              "--arg-file"},
+    "timeout": {"-k", "-s", "--kill-after", "--signal"},
+    "stdbuf": {"-i", "-o", "-e"},
+    # /usr/bin/time's options; the bash keyword `time` takes only -p and so
+    # never reaches a value option, but the binary spelling does — without
+    # this, `-o`'s operand sat at command position and ate the real command.
     "time": {"-o", "-f", "--output", "--format"},
-    "command": set(),
 }
+
+# Prefixes that consume a positional operand of their own before the wrapped
+# command: `timeout 30 cp …` — the duration is not the command.
+_PREFIX_POSITIONALS = {"timeout": 1}
 
 # `cp`/`mv -t DIR src...` — the destination comes FIRST, which makes the usual
 # "last operand is the destination" precisely backwards. This is the spelling
 # `find -exec` and `xargs` generate, so it arrives by accident.
 _TARGET_DIR_OPTS = {"-t", "--target-directory"}
 
+# Options whose value is a separate token and never a source or destination:
+# `install -m 755 tool.sh bin/tool.sh` was recording 755 as a source and the
+# real destination as a directory to land it in.
+_CPMV_VALUE_OPTS = {"-S", "--suffix"}
+_INSTALL_VALUE_OPTS = {"-m", "-o", "-g", "-S", "--mode", "--owner", "--group",
+                       "--suffix", "--strip-program"}
+
+# touch options whose value is read, never created: `touch -r REF stamp`
+# stamps `stamp` with REF's times and writes nothing to REF.
+_TOUCH_VALUE_OPTS = {"-r", "--reference", "-d", "--date", "-t"}
+
+# sed options that carry the script; with none present the FIRST bare
+# argument IS the script, so `sed -i 's/x/y/' file` edits file alone.
+_SED_SCRIPT_OPTS = {"-e", "--expression", "-f", "--file"}
+
 # sed/perl in-place, including GNU's documented long form. The old test was
 # `^-\w*i`, which requires `i` to follow word characters after a single dash —
 # so `--in-place` (and `--in-place=bak`) failed it and edited settings files
 # with no denial and no audit line.
 _INPLACE_RE = re.compile(r"^(?:-\w*i|--in-place(?:=|$))")
+
+# A heredoc marker and its delimiter. Guarded on BOTH sides against `<<<`
+# so a here-string never matches at any offset, and the delimiter must be
+# word-like — `cout <<`, `$((1 << 3))` and `<< "$var"` are shifts, streams
+# and strings, not documents, and treating them as openers ate the rest of
+# the command.
+_HEREDOC_RE = re.compile(
+    r"(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_]\w*)'|\"([A-Za-z_]\w*)\"|\\?([A-Za-z_]\w*))")
 
 # Scratch: allowed and NOT logged, because an audit trail of temp files is
 # noise that buries the project edits it exists to surface.
@@ -139,6 +222,9 @@ _SCRATCH_DIRS = [
 # project's, since both are loaded for the session that is running.
 _CONTROL_SUBDIRS = {"hooks", "agents", "commands", "plugins"}
 _SETTINGS_RE = re.compile(r"^settings(\.[\w-]+)*\.json$")
+# .env templates are committed documentation of shape, not secrets. `.envrc`
+# is NOT exempt: direnv executes it as shell.
+_ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 
 # Unified-diff header pair. A patch names its targets inside the file, so
 # without this the only thing `git apply` and `patch` could be judged on is a
@@ -229,17 +315,21 @@ def _under(path, prefix):
 def _resolve(target, cwd=None):
     """Absolute, normalized path for a write target. No filesystem access:
     normpath rather than realpath, so a backslash cwd and a forward-slash
-    target still reconcile on Windows."""
-    t = str(target).strip("\"'")
+    target still reconcile on Windows. Surrounding whitespace is stripped
+    BEFORE the quotes, so `settings.json ` cannot slide past the basename
+    rules on a stray space."""
+    t = str(target).strip().strip("\"'")
     if t.startswith("~"):
         t = os.path.expanduser(t)
     if "$HOME" in t:
         t = t.replace("$HOME", HOME)
     # POSIX-literal conventions before normalization: Bash commands write
     # /tmp and /dev/null as strings on every platform (Git Bash included),
-    # and Windows normpath would mangle them into \tmp.
+    # and Windows normpath would mangle them into \tmp. posixpath.normpath,
+    # not a raw return: a `/tmp/x/../guard` spelling must still equal the
+    # path it names, or the log's self-guard has a `..`-shaped hole.
     if t.startswith(("/tmp/", "/dev/")) or t in ("/tmp", "/dev/null"):
-        return t
+        return posixpath.normpath(t)
     if not os.path.isabs(t):
         t = os.path.join(os.path.normpath(cwd or os.getcwd()), t)
     return os.path.normpath(t)
@@ -248,9 +338,9 @@ def _resolve(target, cwd=None):
 def is_control_plane(target, cwd=None):
     """True for files that govern THIS session: anything directly under a
     `.claude` directory's hooks/, agents/, commands/ or plugins/, a
-    settings*.json beside them, or any .env file. Everything else — including
-    a plugin's source repo, which changes nothing until it is installed — is
-    ordinary code."""
+    settings*.json beside them, or any .env file (committed templates like
+    .env.example excepted). Everything else — including a plugin's source
+    repo, which changes nothing until it is installed — is ordinary code."""
     p = _resolve(target, cwd)
     # Compared case-folded, because the guard has to hold on the platforms the
     # README says it holds on. APFS (the macOS default) and Windows are
@@ -261,7 +351,8 @@ def is_control_plane(target, cwd=None):
     # matches. On a case-sensitive filesystem it can over-deny a genuinely
     # different `.CLAUDE` directory — the safe direction, and the denial says
     # which path it objected to.
-    if os.path.basename(p).lower().startswith(".env"):
+    base = os.path.basename(p).lower()
+    if base.startswith(".env") and not base.endswith(_ENV_TEMPLATE_SUFFIXES):
         return True
     parts = [q.lower() for q in p.replace("\\", "/").split("/")]
     for i, part in enumerate(parts):
@@ -310,6 +401,13 @@ def _strip_candidates(path, level):
     if level in (0, 1):
         out = clean(parts[level:])
         return [out] if out else []
+    # A crafted 2 MiB patch of 2048-component headers measured 14 s in the
+    # full suffix fan-out — a stalled hook has failed as surely as a wrong
+    # one — so a path deep enough to cost that is judged at the two levels
+    # real tools actually use. is_control_plane scans every component, so a
+    # `.claude` buried mid-path is still caught at level 0.
+    if len(parts) > 64:
+        return [c for c in (clean(parts[i:]) for i in (0, 1)) if c]
     return [c for c in (clean(parts[i:]) for i in range(len(parts))) if c]
 
 
@@ -439,9 +537,14 @@ def _patch_targets(sources, level, cwd, prefix=""):
         try:
             with open(resolved, errors="replace") as fh:
                 text = fh.read(_PATCH_READ_LIMIT)
+                if len(text) == _PATCH_READ_LIMIT:
+                    # A ---/+++ pair straddling the cap is completed rather
+                    # than dropped: two bounded line reads finish the cut
+                    # line and its partner, and nothing more is read.
+                    text += fh.readline(8192) + fh.readline(8192)
         except OSError:
             continue  # unreadable patch: fail open on this one, judge the rest
-        headers = [(_header_path(a), _header_path(b))
+        headers = [(_unquote(_header_path(a)), _unquote(_header_path(b)))
                    for a, b in _PATCH_PAIR_RE.findall(text)]
         headers += [_diff_git_paths(rest.rstrip(" \t"))
                     for rest in _PATCH_DIFF_RE.findall(text)]
@@ -508,14 +611,33 @@ def _opt_value(args, names):
 
 def _segment_args(tokens, i):
     """Arguments of the command starting at tokens[i], up to the next
-    operator or redirect."""
+    operator or redirect. A `<<`/`<<<` marker and its operand are the
+    shell's, not the command's — without the skip, `tee out.txt <<EOF`
+    grew phantom `<<`/`EOF` targets, and a path-shaped delimiter that the
+    heredoc regex rightly refused to strip became a false deny."""
     args = []
     j = i + 1
     while j < len(tokens) and tokens[j] not in _OPERATORS \
             and tokens[j] not in _REDIRECTS and tokens[j] != _INPUT_REDIRECT:
+        if tokens[j] in ("<<", "<<<"):
+            j += 2
+            continue
         args.append(tokens[j])
         j += 1
     return args
+
+
+def _drop_opt_values(args, value_opts):
+    """args with each value option AND its consumed operand removed, so the
+    operand is never mistaken for a source or destination."""
+    out, k = [], 0
+    while k < len(args):
+        if args[k] in value_opts and k + 1 < len(args):
+            k += 2
+            continue
+        out.append(args[k])
+        k += 1
+    return out
 
 
 def _redirected_input(tokens, i):
@@ -535,24 +657,224 @@ def _redirected_input(tokens, i):
     return found
 
 
-def bash_write_targets(cmd, cwd=None):
-    """Every file-write a Bash command performs (redirects, tee, sed/perl
-    in-place, cp/mv/touch, patch, git apply), as a list of targets. Token-based
-    via shlex so quoted strings ('a > b' in a commit message) never
-    false-positive. Fails open — an unparseable command yields nothing.
+def _strip_heredocs(cmd):
+    """The command with every heredoc BODY (and its terminator line) removed.
+    Words inside a document are content, not commands: without this, a
+    doc-writing command whose heredoc mentions `> ~/.claude/settings.json`
+    was denied, and the log recorded a control-plane denial that never
+    happened. The marker line itself is kept, so redirects beside the marker
+    — `cat > file <<EOF` and `cat <<EOF > file` alike — are still judged.
 
-    `patch` and `git apply` name no target on the command line, so cwd is
-    needed to find the patch file and read the targets out of it.
+    A body is stripped ONLY when its terminator line actually exists. With
+    no terminator, nothing is stripped: a false-positive on heredoc-shaped
+    prose is the lesser evil against silently unjudging every line after a
+    stray `<<` — which is what strip-to-EOF did."""
+    if "<<" not in cmd:
+        return cmd
+    lines = cmd.split("\n")
+    out = []
+    k = 0
+    while k < len(lines):
+        line = lines[k]
+        out.append(line)
+        k += 1
+        for m in _HEREDOC_RE.finditer(line):
+            delim = next((g for g in m.groups() if g is not None), "")
+            if not delim:
+                continue
+            dashed = m.group(0)[2:3] == "-"   # <<- allows tab-indented ends
+            end = None
+            for j in range(k, len(lines)):
+                cand = lines[j].lstrip("\t") if dashed else lines[j]
+                if cand == delim:
+                    end = j
+                    break
+            if end is None:
+                continue    # unterminated: strip NOTHING
+            k = end + 1     # the terminator line is not a command either
+    return "\n".join(out)
+
+
+def bash_write_targets(cmd, cwd=None):
+    """What a Bash command does to the filesystem, as a tuple
+    (targets, moves, removed, git_destructive, patch_derived, effective_cwd)
+    — or None when the command cannot be tokenized at all, so the caller can
+    say so instead of silently recording nothing.
+
+    `targets` are file-writes (redirects, tee, sed/perl in-place, cp/mv/
+    install/ln/dd/curl -o/wget -O, touch, patch, git apply/am). `moves` are
+    (src, dst) pairs so an mv can be recorded as the move it is. `removed`
+    are rm's operands; `git_destructive` is true when a git subcommand that
+    discards work ran; `patch_derived` holds the targets that came out of a
+    patch's headers, so the record can drop their a/-b/ fan-out phantoms
+    without touching a real directory named `a/`. Token-based via shlex so
+    quoted strings ('a > b' in a commit message) never false-positive.
+
+    A LEADING `cd dir &&`/`;`/newline prefix (repeated, `cd` alone meaning
+    HOME) moves `effective_cwd`, which all judgment, patch reading and
+    resolution use. Mid-command cd stays unhandled on purpose, and so do
+    `set -e; cd …`, `(cd …)` subshells and `cd … || exit`: the bare
+    first-segment cd is the accident that actually happens, and tracking
+    full shell state is not this hook's job.
 
     All targets, not just the first: a compound that writes /dev/null and then
     settings.json must not be judged on the harmless half."""
+    text = _strip_heredocs(cmd)
+    # Newlines separate commands the way `;` does, and are the commonest
+    # separator in real Bash tool calls. Substituted as "\n;\n" — keeping
+    # the newline — so shlex's own #-comment handling still ends at the
+    # line, while the `;` restores command position for the next line.
+    # Inside a quoted span this inserts a `;` line into the TOKEN CONTENT
+    # (quoted tokens are never parsed further, so nothing downstream reads
+    # it); a backslash-continuation is left alone.
+    text = re.sub(r"(?<!\\)\n", "\n;\n", text)
     try:
-        lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+        lex = shlex.shlex(text, posix=True, punctuation_chars=True)
         lex.whitespace_split = True
         tokens = list(lex)
     except ValueError:
-        return []
-    found = []
+        return None
+    eff_cwd = cwd
+    j = 0
+    while j < len(tokens) and tokens[j] == "cd":
+        if j + 1 >= len(tokens):
+            break                     # trailing bare cd: nothing follows
+        nxt = tokens[j + 1]
+        if nxt in ("&&", ";"):
+            eff_cwd = HOME            # bare `cd` goes home
+            j += 2
+            continue
+        if nxt.startswith("-"):
+            break                     # `cd -` or an option: shell state we
+                                      # do not model — stop peeling
+        if j + 2 < len(tokens) and tokens[j + 2] in ("&&", ";"):
+            eff_cwd = _resolve(nxt, eff_cwd)
+            j += 3
+            continue
+        break
+    tokens = tokens[j:]
+    found, moves, removed, git_rm = [], [], [], []
+    patch_derived = set()
+
+    def judge(base, args):
+        """Write targets of one simple command, shared with the embedded
+        command a `find -exec` generates."""
+        paths = [a for a in args if not a.startswith("-")]
+        if base == "tee":
+            found.extend(paths)          # tee writes EVERY operand
+        elif base == "sed":
+            # The edited files are the arguments — naming them, rather than
+            # a sentinel, is what lets an in-place edit of a settings file
+            # be judged as one. The script is a program, not a file.
+            if any(_INPLACE_RE.match(a) for a in args):
+                consumed, k = set(), 0
+                while k < len(args):
+                    if args[k] in _SED_SCRIPT_OPTS and k + 1 < len(args):
+                        consumed.update((k, k + 1))
+                        k += 2
+                        continue
+                    k += 1
+                rest = [a for k2, a in enumerate(args)
+                        if k2 not in consumed and not a.startswith("-")]
+                if not any(a in _SED_SCRIPT_OPTS or
+                           a.startswith(("--expression=", "--file="))
+                           for a in args):
+                    rest = rest[1:]      # the first bare arg IS the script
+                found.extend(rest or ["(in-place edit)"])
+        elif base == "perl":
+            if any(_INPLACE_RE.match(a) for a in args):
+                found.extend(paths or ["(in-place edit)"])
+        elif base in ("cp", "mv", "install"):
+            # install shares cp's accident shape: -t, and a positional
+            # destination that is a directory. Option values (-S suffix,
+            # install's -m/-o/-g/…) are dropped first so a mode or owner is
+            # never read as a source.
+            opts = _INSTALL_VALUE_OPTS if base == "install" else _CPMV_VALUE_OPTS
+            paths = [a for a in _drop_opt_values(args, opts)
+                     if not a.startswith("-")]
+            if base == "install" and ("-d" in args or "--directory" in args):
+                found.extend(paths)      # install -d CREATES its operands
+                return
+            tdir = _opt_value(args, _TARGET_DIR_OPTS)
+            if tdir:
+                srcs = [p for p in paths if p != tdir]
+                if not srcs:
+                    # xargs/find feed the sources on stdin, so the -t
+                    # directory itself is the visible half of the write.
+                    found.append(tdir)
+                for p in srcs:
+                    dest = os.path.join(tdir, os.path.basename(p))
+                    found.append(dest)
+                    if base == "mv":
+                        moves.append((p, dest))
+            elif len(paths) >= 2:
+                dest, srcs = paths[-1], paths[:-1]
+                # A destination that is a directory lands dir/basename(src):
+                # by trailing slash, by what the filesystem says, or by
+                # arity (three or more operands can only mean a directory).
+                if (dest.endswith(("/", os.sep)) or len(paths) >= 3
+                        or os.path.isdir(_resolve(dest, eff_cwd))):
+                    for p in srcs:
+                        d = os.path.join(dest, os.path.basename(p))
+                        found.append(d)
+                        if base == "mv":
+                            moves.append((p, d))
+                else:
+                    found.append(dest)
+                    if base == "mv":
+                        moves.append((srcs[-1], dest))
+        elif base == "ln":
+            # `.`/empty operands are dropped: `ln -s ../x.py .` was
+            # recording the whole cwd as an edit.
+            tdir = _opt_value(args, _TARGET_DIR_OPTS)
+            ops = [p for p in paths if p not in (".", "") and p != tdir]
+            if tdir:
+                if ops:
+                    found.extend(os.path.join(tdir, os.path.basename(p))
+                                 for p in ops)
+                else:
+                    found.append(tdir)
+            elif len(ops) >= 2:
+                found.append(ops[-1])    # the link name being created
+        elif base == "dd":
+            found.extend(a[3:] for a in args
+                         if a.startswith("of=") and a[3:])
+        elif base == "curl":
+            # -o FILE only. Known limit: `curl -O` derives its filename
+            # from the URL, which nothing here can name.
+            out = _opt_value(args, {"-o", "--output"})
+            if out:
+                found.append(out)
+        elif base == "wget":
+            out = _opt_value(args, {"-O", "--output-document"})
+            if out:
+                found.append(out)
+        elif base == "touch":
+            # -r/-d/-t values are read, never created.
+            skip, k = set(), 0
+            while k < len(args):
+                if args[k] in _TOUCH_VALUE_OPTS and k + 1 < len(args):
+                    skip.add(k + 1)
+                    k += 2
+                    continue
+                k += 1
+            found.extend(a for k2, a in enumerate(args)
+                         if k2 not in skip and not a.startswith("-"))
+        elif base == "rm":
+            removed.extend(paths)
+        elif base == "find":
+            # find generates the very command shapes the -t comment names.
+            # patch/git are skipped in embedded position: they name their
+            # input via redirects, which cannot appear inside -exec.
+            # tar/unzip/rsync stay out everywhere: archive and remote
+            # semantics name no plain target worth a guess.
+            for k, a in enumerate(args):
+                if a in ("-exec", "-execdir", "-ok", "-okdir"):
+                    emb = [x for x in args[k + 1:] if x != "+"]
+                    if emb:
+                        judge(emb[0].rsplit("/", 1)[-1], emb[1:])
+                    break
+
     cmdpos = True
     i = 0
     while i < len(tokens):
@@ -561,17 +883,25 @@ def bash_write_targets(cmd, cwd=None):
             cmdpos = True
             i += 1
             continue
+        if tok == "<<":
+            i += 2  # the body is already stripped; skip the delimiter word
+            continue
         if tok == _INPUT_REDIRECT:
             i += 2  # its operand is an input, never a target
             continue
         if tok in _REDIRECTS:
             if i + 1 < len(tokens):
                 target = tokens[i + 1]
-                if not target.startswith("&"):
+                # fd duplication (2>&1, >&2, >&-) names no file.
+                if not target.startswith("&") and not (
+                        tok == ">&" and (target.isdigit() or target == "-")):
                     found.append(target)
             i += 2
             continue
         if cmdpos:
+            if tok in _RESERVED:
+                i += 1
+                continue    # still at command position: `do cp …` runs cp
             base = tok.rsplit("/", 1)[-1]
             if base in _CMD_PREFIXES or ("=" in tok and not tok.startswith("-")):
                 i += 1
@@ -584,58 +914,80 @@ def bash_write_targets(cmd, cwd=None):
                 vals = _PREFIX_VALUE_OPTS.get(base, set())
                 while i < len(tokens) and tokens[i].startswith("-"):
                     i += 2 if (tokens[i] in vals and i + 1 < len(tokens)) else 1
+                # timeout's duration is a positional of the prefix, not the
+                # wrapped command.
+                extra = _PREFIX_POSITIONALS.get(base, 0)
+                while extra > 0 and i < len(tokens) \
+                        and tokens[i] not in _OPERATORS \
+                        and tokens[i] not in _REDIRECTS \
+                        and tokens[i] != _INPUT_REDIRECT:
+                    i += 1
+                    extra -= 1
                 continue  # still at command position
             args = _segment_args(tokens, i)
-            paths = [a for a in args if not a.startswith("-")]
-            if base == "tee":
-                found.extend(paths)          # tee writes EVERY operand
-            elif base in ("sed", "perl"):
-                # The edited files are the arguments — naming them, rather than
-                # a sentinel, is what lets an in-place edit of a settings file
-                # be judged as one.
-                if any(_INPLACE_RE.match(a) for a in args):
-                    found.extend(paths or ["(in-place edit)"])
-            elif base in ("cp", "mv"):
-                tdir = _opt_value(args, _TARGET_DIR_OPTS)
-                if tdir:
-                    found.extend(os.path.join(tdir, os.path.basename(p))
-                                 for p in paths if p != tdir)
-                elif len(paths) >= 2:
-                    found.append(paths[-1])
-            elif base == "touch":
-                found.extend(paths)          # touch creates EVERY operand
-            elif base == "patch":
-                found.extend(_patch_targets(
+            if base == "patch":
+                pt = _patch_targets(
                     _patch_sources(args, _redirected_input(tokens, i)),
-                    _patch_strip(args), cwd,
-                    prefix=_opt_value(args, _DIR_OPTS)))
+                    _patch_strip(args), eff_cwd,
+                    prefix=_opt_value(args, _DIR_OPTS))
+                found.extend(pt)
+                patch_derived.update(pt)
                 # -o redirects the result to a file the headers never name.
                 out = _opt_value(args, _OUT_OPTS)
                 if out:
                     found.append(out)
             elif base == "git":
                 sub, tail = _git_subcommand(args)
-                if sub == "apply":
-                    # every_positional: `git apply a.patch b.patch` applies both.
-                    found.extend(_patch_targets(
+                if sub in ("apply", "am"):
+                    # every_positional: `git apply a.patch b.patch` applies
+                    # both. `am` is apply for format-patch output — the
+                    # mailbox framing changes nothing about the ---/+++
+                    # headers this reads. git documents -p1 as the default
+                    # for both, so an absent level is 1, not a fan-out.
+                    lvl = _patch_strip(tail)
+                    pt = _patch_targets(
                         _patch_sources(tail, _redirected_input(tokens, i),
                                        every_positional=True),
-                        _patch_strip(tail), cwd,
-                        prefix=_opt_value(tail, _DIR_OPTS)))
+                        1 if lvl is None else lvl, eff_cwd,
+                        prefix=_opt_value(tail, _DIR_OPTS))
+                    found.extend(pt)
+                    patch_derived.update(pt)
+                elif ((sub == "clean"
+                        and not {"-n", "--dry-run"} & set(tail))
+                        or (sub == "restore"
+                            and not ("--staged" in tail
+                                     and "--worktree" not in tail))
+                        or (sub == "reset" and "--hard" in tail)
+                        or (sub == "checkout" and "--" in tail)
+                        or (sub == "stash" and tail[:1] == ["drop"])):
+                    # The subcommands that discard work. Recorded, not
+                    # denied: the record was silent on precisely the
+                    # hardest-to-undo operations. A clean dry-run and a
+                    # --staged-only restore discard nothing.
+                    git_rm.append(sub)
+            else:
+                judge(base, args)
         cmdpos = False
         i += 1
-    return found
+    return found, moves, removed, bool(git_rm), patch_derived, eff_cwd
 
 
 CONTROL_PLANE_DENIAL = (
-    "Routing policy: %s is the control plane — settings, hooks, agent and "
-    "command definitions, the installed plugin tree, or a .env. Changing what "
-    "governs this session stays delegated, so every rules change leaves a "
-    "record: hand it to 'opulent:coder' or 'opulent:mechanic'. A plugin's "
-    "source repo is not the control plane and needs no delegation.")
+    "Routing policy: %s is the control plane — a .claude directory's "
+    "settings, hooks, agents, commands or plugins (the user's or the "
+    "project's), or a .env. Changing what governs sessions stays delegated, "
+    "so every rules change leaves a record: hand it to 'opulent:coder' or "
+    "'opulent:mechanic'. A plugin's source repo is not the control plane "
+    "and needs no delegation.")
+
+LOG_DENIAL = (
+    "Routing policy: %s is this session's routing log — the audit record "
+    "itself. The main loop never rewrites or deletes it; resetting it is "
+    "the user's call, and safe for the user to do between sessions.")
 
 
 def main():
+    global _SID
     payload = json.load(sys.stdin)
 
     if dial("OPULENT_OFF"):
@@ -643,6 +995,8 @@ def main():
 
     if payload.get("agent_id"):  # inside a subagent: everything allowed
         allow()
+
+    _SID = str(payload.get("session_id") or "")[:8]
 
     tool = payload.get("tool_name", "")
     tin = payload.get("tool_input") or {}
@@ -677,27 +1031,81 @@ def main():
 
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
         path = tin.get("file_path") or tin.get("notebook_path") or ""
-        if is_control_plane(path, cwd):
-            deny(CONTROL_PLANE_DENIAL % path, "control:" + str(path))
-        if is_scratch(path, cwd):
+        if not path:
+            allow()  # no path: nothing to judge, and nothing worth a line
+        p = _resolve(path, cwd)
+        if is_control_plane(p, cwd):
+            deny(CONTROL_PLANE_DENIAL % p, "control:" + p)
+        if _LOG_GUARDED and p == _LOG_NORM:
+            deny(LOG_DENIAL % p, "log:" + p)
+        if is_scratch(p, cwd):
             allow()
-        allow("edit", str(path))
+        allow("edit", p)
 
     if tool == "Bash":
         cmd = tin.get("command", "")
-        targets = bash_write_targets(cmd, cwd)
-        for t in targets:
-            if os.path.basename(str(t)) == CANARY:
+        parsed = bash_write_targets(cmd, cwd)
+        if parsed is None:
+            # An unbalanced quote must not silently blind the record: one
+            # line says the parser saw nothing, and the test check still
+            # runs against the raw text.
+            _log("unparsed", cmd[:80])
+            if TEST_RE.search(cmd):
+                _log("test", cmd[:80])
+            allow()
+        targets, moves, removed, git_rm, patch_derived, eff_cwd = parsed
+        # The sed sentinel is a marker, not a path — resolving it painted it
+        # under the cwd in the record.
+        pairs = [(t, t if t == "(in-place edit)" else _resolve(t, eff_cwd))
+                 for t in targets]
+        for t, rp in pairs:
+            if os.path.basename(rp) == CANARY:
                 deny("Routing policy: the /opulent:doctor canary (%s), denied on "
                      "purpose — enforcement is live and nothing was written."
-                     % CANARY, "canary:" + str(t), event="probe")
-            if is_control_plane(t, cwd):
-                deny(CONTROL_PLANE_DENIAL % t, "control:" + str(t))
-        written = [t for t in targets if not is_scratch(t, cwd)]
-        if written:
-            allow("edit", ", ".join(str(t) for t in written)[:120])
-        if TEST_RE.search(cmd) and not VERSION_RE.search(cmd):
-            allow("test", cmd[:80])
+                     % CANARY, "canary:" + rp, event="probe")
+            if _LOG_GUARDED and rp == _LOG_NORM:
+                deny(LOG_DENIAL % rp, "log:" + rp)
+            if is_control_plane(rp, eff_cwd):
+                deny(CONTROL_PLANE_DENIAL % rp, "control:" + rp)
+        rm_pairs = [(p, _resolve(p, eff_cwd)) for p in removed]
+        for p, rp in rm_pairs:
+            if _LOG_GUARDED and rp == _LOG_NORM:
+                deny(LOG_DENIAL % rp, "log:" + rp)
+        # The record, after judgment: scratch stays out, an mv is shown as
+        # the move it is, `{}` operands are find's placeholder rather than a
+        # path, and a patch fan-out's a/- and b/-prefixed spellings are
+        # dropped once their stripped sibling is present — phantoms in the
+        # detail were crowding out the real names. Patch-derived only: a
+        # real directory named a/ is not a phantom.
+        tset = set(targets)
+        # Known limit: keyed by destination string, so an earlier cp that
+        # shares an mv's destination would borrow its arrow.
+        mv_src = dict((d, s) for s, d in moves)
+        shown = []
+        for t, rp in pairs:
+            s = str(t).replace("\\", "/")
+            if t in patch_derived and s[:2] in ("a/", "b/") and s[2:] in tset:
+                continue
+            if "{}" in s:
+                continue
+            if is_scratch(rp, eff_cwd):
+                continue
+            if t in mv_src:
+                shown.append("%s -> %s" % (_resolve(mv_src[t], eff_cwd), rp))
+            else:
+                shown.append(rp)
+        if shown:
+            _log("edit", ", ".join(shown))
+        kept_rm = [rp for p, rp in rm_pairs
+                   if "{}" not in str(p) and not is_scratch(rp, eff_cwd)]
+        if kept_rm:
+            _log("remove", ", ".join(kept_rm))
+        if git_rm:
+            _log("remove", cmd[:80])
+        probe = _COMMENT_RE.sub(" ", _QUOTED_RE.sub(" ", _strip_heredocs(cmd)))
+        if TEST_RE.search(probe):
+            _log("test", cmd[:80])
+        allow()
 
     allow()
 

@@ -6,24 +6,26 @@ Welcome to **Opulent**! 👋
 
 If you use Claude Code for long sessions, you already know the problem: the conversation you're actually having fills up with file bodies, test outputs, and search results you never needed to read. The model you're talking to ends up spending its context window on clutter.
 
-Opulent solves this through strict **context hygiene**. Your best coding model (Opus 5 by default) stays in the architect seat—designing, reviewing, and orchestrating. All the execution—editing files, running tests, searching the codebase—gets pushed into separate, purpose-built agent sessions. The bulk lands there and is thrown away, keeping your main conversation clean and lean deep into your workflow.
+Opulent solves this through strict **context hygiene**. Your best coding model (typically Opus 5) stays in the architect seat—designing, reviewing, and orchestrating. All the execution—editing files, running tests, searching the codebase—gets pushed into separate, purpose-built agent sessions. The bulk lands there and is thrown away, keeping your main conversation clean and lean deep into your workflow.
 
 ---
 
 ## 📋 Requirements
 
 * **Python 3** on your `PATH` (as `python3` or `python`). 
-  * *Note:* This is preinstalled on macOS and most Linux distros. On Windows, please install directly from python.org rather than relying on the Windows Store alias.
+  * *Note:* Preinstalled on macOS and most Linux distros. On Windows, install from python.org — it ships `python.exe` only, no `python3` — then disable **both** App execution aliases (Settings → Apps → Advanced app settings → App execution aliases) and verify `python3 --version` and `python --version` in a terminal. A missing interpreter means silently **no enforcement**: fail-open can't cover an interpreter that never started.
 * Everything else is stock Claude Code! No extra packages, no background daemons, and no network calls.
 
 ## 📦 Installation
 
 Add the marketplace once, then install:
 
-```bash
+```text
 /plugin marketplace add analogproblems/Opulent   # or a local /path/to/Opulent
 /plugin install opulent@opulent
 ```
+
+*(Those two are slash commands — type them inside Claude Code, not in your shell.)*
 
 Or, if you want to try it without installing first:
 
@@ -31,9 +33,10 @@ Or, if you want to try it without installing first:
 claude --plugin-dir /path/to/Opulent
 ```
 
-### ⚠️ Two Quick Timing Gotchas:
+### ⚠️ Three Quick Timing Gotchas:
 1. **Enable/Disable takes effect at session start.** Enabling a plugin mid-session does not register its hooks or agents. Always start a fresh session after toggling!
 2. **Updates are a two-step process.** Running `claude plugin marketplace update opulent` only refreshes the cache. To actually update, follow it with `claude plugin update opulent@opulent` (and restart your session).
+3. **Update from outside a session.** Running `claude plugin update` inside a session removes the versioned install directory the running session's hooks resolve to, so every guarded tool call errors until restart. Update from a plain terminal, or restart immediately after.
 
 ---
 
@@ -45,14 +48,16 @@ Here is exactly where your tasks go:
 
 | Work | Agent | Model & Effort |
 | :--- | :--- | :--- |
-| **Architecture, review, orchestration** | *Main loop (Architect)* | Opus 5 (or Fable) |
+| **Architecture, review, orchestration** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 recommended) |
 | **Complex implementation** | `opulent:coder` | Opus, Effort: Max |
 | **Complex implementation (Eco Mode)** | `opulent:coder-eco` | Opus, Effort: xHigh |
 | **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet |
-| **Tests, builds, linters** | `opulent:test-runner` | Sonnet (Read-only) |
+| **Tests, builds, linters** | `opulent:test-runner` | Sonnet (no edit tools) |
 | **UI verification, console errors** | `opulent:ui-checker` | Sonnet + browser tools |
 | **Documentation (READMEs, ADRs)** | `opulent:scribe` | Opus, Effort: xHigh |
 | **Locating code and structure** | `opulent:scout` | Haiku |
+
+*A lane whose definition lists no tools (coder, coder-eco, mechanic) inherits all tools.*
 
 *Note: You can manually escalate problems Opus can't crack to Fable in its own separate session. You can also run Fable in the Architect seat if you have access!*
 
@@ -60,11 +65,11 @@ Here is exactly where your tasks go:
 
 ## 🎛️ Setting the Dials (Eco Mode)
 
-Opulent is configured via environment variables. *Note: Exporting these inside a running session does nothing, as the hooks are spawned by the harness.*
+Opulent is configured via environment variables. *Note: The hooks read these from the environment Claude Code was launched with — exporting them inside a running session does nothing, and a change takes effect at the next session start.*
 
 * **Eco Mode (`OPULENT_ECO=1`):** Runs complex implementation one effort rung down. It routes `opulent:coder` tasks to `opulent:coder-eco` (Opus at `xhigh` effort instead of `max`). 
 * **Kill Switch (`OPULENT_OFF=1`):** Disables enforcement entirely for that session.
-* **Custom Logs (`OPULENT_LOG=<path>`):** Redirects the telemetry log from its default location.
+* **Custom Logs (`OPULENT_LOG=<path>`):** Redirects the telemetry log from its default location, `~/.claude/opulent-log.jsonl`.
 
 **How to set them:**
 Per launch:
@@ -77,6 +82,8 @@ Persistently (in `~/.claude/settings.json`):
 ```
 *(0, false, no, off, and empty all count as unset).*
 
+One heads-up: if you ask the assistant to make that `settings.json` edit for you, the hook will deny it — settings files are the control plane, so the change gets redirected to a lane. That's the design working; make the edit yourself in an editor if you prefer.
+
 ---
 
 ## 🛡️ Enforcement & Honesty
@@ -84,10 +91,10 @@ Persistently (in `~/.claude/settings.json`):
 Opulent uses built-in Claude Code hooks (PreToolUse and SessionStart). 
 
 **What it enforces:**
-A hook denies ordinary paths to writing code, running tests, or delegating to catch-all agents directly from the main loop, pointing the model toward the specific lanes above. It explicitly protects the **control plane** (`.claude/` directories, `.env` files) from main-loop edits so changes aren't made silently. 
+Main-loop edits and test runs are **allowed and logged** — the hook records what the architect touches instead of blocking it. What it *does* deny from the main loop: the **control plane** (any `.claude` directory's hooks, agents, commands, plugins, and the `settings*.json` beside them — the user's and the project's — plus `.env` files, templates like `.env.example` excepted), the built-in Explore agent, catch-all agents, and the routing log itself.
 
 **What it isn't:**
-This is a seatbelt with an audit trail, not a flawless security boundary. A determined model *can* bypass it via inline scripts or exotic utilities. The goal is to make the recorded path the path of least resistance, keeping your project edits visible in `~/.claude/opulent-log.jsonl`. 
+This is a seatbelt with an audit trail, not a flawless security boundary. A determined model *can* bypass it via inline scripts or exotic utilities. The goal is to make the recorded path the path of least resistance: the log (`~/.claude/opulent-log.jsonl` by default) records main-loop edits, test runs, delegations, denials, and removals, session-tagged. Work done inside lanes isn't logged — the record covers the architect's own hands. The log is yours to delete between sessions; the main loop is denied touching it.
 
 *(Bonus: Opulent is designed to **fail-open**. If a Claude Code update breaks a payload the hook can't parse, it allows the action. An update will never brick your sessions.)*
 
@@ -105,4 +112,4 @@ It probes the installation with real tool calls (checking version, registered ag
 
 ## 📝 License
 
-This project is MIT licensed. Please see our house rules in `CONTRIBUTING.md`, chiefly the honesty policy.
+This project is MIT licensed. Version history lives in [`CHANGELOG.md`](CHANGELOG.md). Please see our house rules in `CONTRIBUTING.md`, chiefly the honesty policy.

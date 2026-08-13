@@ -14,9 +14,10 @@ valid and welcome PR.
 ## Development loop
 
 ```
-python3 tests/hook_selftest.py                      # routing hook payload cases
+python3 tests/hook_selftest.py                      # routing hook payload cases (~260, one subprocess each)
 python3 tests/ci_checks.py                          # marketplace manifests + session-start JSON
 python3 tests/gate_selftest.py                      # the gate finds planted terms, and never prints them
+python3 tests/gate_corpus_selftest.py               # the gate's corpus sees every blind-spot plant
 python3 tests/public_gate.py                        # no private residue in the object database
 python3 tests/validate_plugins.py                   # claude CLI structure validation (needs claude on PATH)
 ```
@@ -27,7 +28,7 @@ notice instead of failing — its manifest and CI live in its own tree.
 
 Hook changes need test cases — both the deny you're adding and the
 false-positive you're *not* adding (quoted strings, `--version` lookups,
-sibling script names). The first four suites run on every push and every
+sibling script names). The first five suites run on every push and every
 pull request, on GitHub-hosted runners — which is the whole of this repo's CI,
 because no self-hosted runner serves a public repository. The live end-to-end
 tier (`tests/e2e_smoke.py`) drives real throwaway Claude sessions against an
@@ -54,8 +55,8 @@ fail against our main until it does.
   will not be merged. Unknown payload shapes allow; errors allow. This governs
   hooks, not CI: `tests/public_gate.py` fails *closed* by design, because a
   scan that could not read the object database has not cleared it.
-- **Enforcement is a seatbelt, not a wall** — see the README's "What
-  enforcement is — and isn't". PRs that chase perfect enforcement by
+- **Enforcement is a seatbelt, not a wall** — see the README's "Enforcement
+  & Honesty" section. PRs that chase perfect enforcement by
   blocking ever-more Bash will lose to the ergonomics they cost.
 - **The plugins must stay independently installable.** opulent must not
   require lens-master, or vice versa.

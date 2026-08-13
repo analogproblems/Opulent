@@ -10,6 +10,89 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.11.3 — 2026-08-13
+
+**What the second review found.** Six fresh-context lenses over the
+freshly-hardened 0.11.2 produced a 76-item inventory and ~70 targeted
+mutants; the 20 hook-suite and 11 gate-suite mutation survivors are now
+killed. Round one was about holes in denial; this round was mostly about
+the honesty of the record.
+
+**The record grew teeth.** Every log line now carries the session id
+(`sid`) and resolved absolute paths, so concurrent sessions stay
+distinguishable and the detail names real files; `mv` logs `src -> dst`.
+A command that writes AND tests logs both events — `pytest > results.txt`
+used to log only the edit. Two new events: `unparsed` (a command the
+tokenizer could not read — the write, if any, happened unaudited; one
+unbalanced apostrophe used to blind the parser silently) and `remove`,
+covering `rm` and destructive git (`reset --hard`, `clean`, `checkout --`,
+`restore`, `stash drop`) — logged, not denied, because the record was
+silent on precisely the hardest-to-undo operations. The log now guards
+itself: the main loop may not overwrite or delete its own audit record;
+resetting it is the user's call, between sessions. And the session-start
+activity line always counts delegations, denials, edits and test runs —
+the commonest post-0.9.0 session, edits and tests with no denial, used to
+render as silence — while a fresh log prints "No routing activity recorded
+yet" with the path.
+
+**The parser learned the accidental shapes.** Writers inside `for`/`if`/
+`while` bodies; `cp`/`mv` with a directory destination; `find -exec`;
+`xargs cp -t`; the `>&file` redirect; `git am`; `timeout`/`nohup`/
+`stdbuf`/`setsid` prefixes; `install`, `ln`, `dd`, `curl -o`, `wget -O`.
+The heredoc false positive is fixed — a doc-writing command whose heredoc
+mentioned a settings path was denied, with a fabricated audit line — the
+patch read-cap now completes a header pair straddling it, and the no-level
+strip fan-out is bounded (a crafted 2 MiB patch could stall the hook 14 s).
+Each landed test-first with its false-positive twin, per the house rule.
+`VERSION_RE` is deleted: it suppressed real test records (`npm test &&
+tsc --version` logged nothing), and over-logging is the safe direction.
+
+**Tests a no-op can no longer pass.** The hook suite grew 144 → 297 cases:
+the event list is asserted by equality rather than membership (a fabricated
+extra event now fails), every line is schema-checked, every denial kind has
+its reason text asserted (the Explore redirect could previously name the
+wrong lane unnoticed), and each case carries a subprocess timeout — the old
+suite, pointed at the 0.11.1 hook, hung forever. Before any of it was
+committed, a second adversarial pass over the day's own diff caught three
+regressions the new code had introduced — here-strings eaten as heredocs,
+`/usr/bin/time -o` unguarded, newline-separated `cd` unpeeled — each landing
+back as a red case first; that pass is the last 37 of the 297. The gate suites (16 + 17
+cases) gained the plants the 0.11.2 entry claimed: multi-line terms, a
+capitalized occurrence, all four refusal paths, `DENY_TAGS`, stash refs —
+with one honest correction: git notes were in fact visible to the old gate
+(stashes were not), so that entry overstated the blind spot by one ref
+family. The e2e checks are rewritten so the injected policy cannot satisfy
+them: the agent check relays a nonce through a real `opulent:scout` run,
+and the denial check gained an allow-side control — an ordinary write must
+be allowed and logged as `edit`.
+
+**The doctor stopped trusting its own shortcuts.** The canary probe must
+run in the main loop — a delegated canary is exempt by design, always
+succeeds, and manufactured a false DEAD. The dial echo is reported as what
+the shell sees, never as authority (the hook reads the harness
+environment), and the canary runs regardless. It no longer asks for lane
+names the canary message never contained; a LIVE verdict must be
+corroborated by a fresh `probe` line in the log tail; and step 5 gained
+its third branch — canary denied but no probe line means `OPULENT_LOG`
+points somewhere unwritable and telemetry is being silently discarded.
+PARTIAL is now defined instead of merely listed.
+
+**README re-grounded in the code.** Enforcement is described as it is:
+main-loop edits and test runs allowed and recorded, the denied set listed
+exactly (the control plane in both scopes — the user's and the project's
+`.claude` — plus Explore, catch-alls, and the log itself), and the record
+covering the architect's own hands, not lane work. The dials take effect
+at the next session start, the settings.json recipe is named as an edit
+the assistant itself will be denied, and the Windows note now saves the
+Windows reader: python.org ships no `python3`, both Store aliases must be
+disabled, and a missing interpreter is silently zero enforcement.
+
+**Open, named honestly:** whether ui-checker's `tools: mcp__Claude_Browser`
+server-name grant resolves to actual browser tools still needs one probe in
+an opulent-enabled session; and SessionStart context is verified NOT to
+reach subagents in the desktop harness, so lanes never receive the
+delegate-everything policy.
+
 ## opulent 0.11.2 — 2026-08-13
 
 **What the review found.** Five fresh-context lenses over the public state

@@ -451,10 +451,8 @@ def main(repo):
     terms = DENY + PRIVATE
 
     tags = git(repo, "tag", "-l").stdout.split()
-    refs = git(repo, "for-each-ref", "--format=%(refname)").stdout.split()
     chunks = list(corpus(repo))
-    say(f"scanned: {len(chunks)} objects and refs, {len(tags)} tags, "
-        f"{len(refs)} refs in {repo}")
+    say(f"scanned: {len(chunks)} objects and refs, {len(tags)} tags in {repo}")
     if PRIVATE:
         say(f"private terms: {len(PRIVATE)} supplied via {PRIVATE_ENV}, "
             f"matched but never echoed")

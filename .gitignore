@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+opulent-doctor-canary
+opulent-log.jsonl
+.claude/settings.local.json

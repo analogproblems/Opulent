@@ -36,11 +36,14 @@ a risky change deserves a lane and a review even when it is small, and a trivial
 acquire risk by being touched directly.
 
 A PreToolUse hook records rather than blocks: main-loop edits and test runs are ALLOWED and
-appended to the log, so what the main loop touched stays visible. Four things are still denied —
-the control plane (settings, hooks, agent and command definitions, the installed plugin tree
-under ~/.claude, and any .env), the built-in Explore agent, and catch-all agents
-(general-purpose, claude). A plugin's SOURCE repo is ordinary code: edit it directly. Scratch
-writes under the system temp dir and ~/.claude/{plans,projects,todos} are allowed and not logged.
+appended to the log, so what the main loop touched stays visible. Still denied from the main
+loop: the control plane (any `.claude` directory's hooks/, agents/, commands/ or plugins/, the
+settings*.json beside them — the user's AND the project's — plus any .env file, committed
+templates like .env.example excepted), the built-in Explore agent, catch-all agents
+(general-purpose, claude), and this session's routing log itself. Subagent calls are allowed
+and not logged: the record covers the main loop only. A plugin's SOURCE repo is ordinary code:
+edit it directly. Scratch writes under the system temp dir and ~/.claude/{plans,projects,todos}
+are allowed and not logged.
 
 Delegation bridge: instructions do not cross the agent boundary on their own. When delegated work
 runs under a lens or contract (a refactoring contract, a debugging oath, a review lens), paste the
@@ -114,7 +117,9 @@ def _recent_activity():
         # session got NO routing policy at all. Telemetry is the garnish here;
         # it must never cost the policy. `errors="replace"` makes that
         # unreachable now, and this stays as the belt to its braces.
-        return ""
+        # A missing or unreadable log is simply zero recorded activity — the
+        # zero-count line below still names the path.
+        lines = []
     # Counted by parsing the JSON this hook's sibling wrote, not by looking for
     # a quoted token anywhere in the line. The token appears in the `detail`
     # field too, so writing a file named `deny` or `eco` used to fabricate a
@@ -127,17 +132,23 @@ def _recent_activity():
             events.append(json.loads(line).get("event"))
         except Exception:
             continue        # a torn or hand-edited line is not an event
-    # Delegations and denials are always reported, so a quiet session still
-    # says so out loud. Probes and eco redirects are reported only when they
-    # happened: both exist to stay OUT of the denial count, and a pair of
-    # permanent zeroes would just be noise in the line people actually read.
-    always = [("delegations", "delegate"), ("denials", "deny")]
-    when_seen = [("probes", "probe"), ("eco redirects", "eco")]
+    # Delegations, denials, edits and test runs are always reported — the
+    # commonest post-0.9.0 session is edits and tests with no denial at all,
+    # and a line that omitted them reported that session as silence. Probes,
+    # eco redirects, unparsed commands and removals are reported only when
+    # they happened: the first two exist to stay OUT of the denial count, and
+    # a row of permanent zeroes would just be noise in the line people read.
+    always = [("delegations", "delegate"), ("denials", "deny"),
+              ("edits", "edit"), ("test runs", "test")]
+    when_seen = [("probes", "probe"), ("eco redirects", "eco"),
+                 ("unparsed commands", "unparsed"), ("removals", "remove")]
     counts = [(name, events.count(key)) for name, key in always]
     counts += [(name, n) for name, n in
                ((name, events.count(key)) for name, key in when_seen) if n]
     if not any(n for _, n in counts):
-        return ""
+        # Zero activity still teaches the log path — on a fresh install this
+        # is the only line that ever names it.
+        return "\n\nNo routing activity recorded yet. Log: %s" % path
     # len(events), not len(lines): a blank or unparseable trailing line is not
     # an event, and reporting "last N+1 events" over a window that held N was
     # a small lie in the one line people actually read.
@@ -152,13 +163,17 @@ def _context():
     Computing them in one expression meant anything thrown while reading the
     log took the policy down with it, silently, leaving the session with no
     routing guidance while the PreToolUse hook kept enforcing against it."""
+    if dial("OPULENT_OFF"):
+        # OFF_NOTE says no routing log is being written; printing activity
+        # counts (or the no-activity line) directly beneath it would
+        # contradict it on the same screen.
+        return _policy()
     try:
         return _policy() + _recent_activity()
     except Exception:
-        try:
-            return _policy()
-        except Exception:
-            return ""
+        # _policy() is string substitution over constants and cannot raise;
+        # only the telemetry read can land here, and the policy survives it.
+        return _policy()
 
 
 print(json.dumps({"hookSpecificOutput": {

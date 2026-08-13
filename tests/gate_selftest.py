@@ -29,7 +29,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-GATE = str(Path(__file__).resolve().parent / "public_gate.py")
+# Overridable so this suite can be pointed at an OLD copy of the gate and
+# watched to fail — the same dial gate_corpus_selftest.py has, because a
+# redaction test that has never been seen red is a redaction test nobody has
+# checked. The crash case copies whatever this points at, so it follows too.
+GATE = os.environ.get("PUBLIC_GATE_PATH") or str(
+    Path(__file__).resolve().parent / "public_gate.py")
 PRIVATE_ENV = "PUBLIC_GATE_PRIVATE_TERMS"
 
 # Name-shaped nonsense, because names are what the channel exists for. No
@@ -109,6 +114,16 @@ REPO = build_repo(scratch())
 PATH_REPO = build_repo(scratch(f"{PATH_PLANTED}-work",
                                f"{PATH_PLANTED.capitalize()}-checkout"))
 HEAD9 = git(REPO, "rev-parse", "HEAD").strip()[:9]
+
+# The refusals are output too. Both fire before any scan — which is exactly
+# why the gate reads PRIVATE at import — and both name the path they refused,
+# public_gate.py says so itself. A path is where the planted username lives,
+# so each refusal gets a fixture at a path carrying the plant: a directory
+# with no repository in it, and a shallow clone.
+NOT_REPO = scratch(f"{PATH_PLANTED}-plain")
+os.makedirs(NOT_REPO)
+SHALLOW_REPO = scratch(f"{PATH_PLANTED}-shallow")
+git(REPO, "clone", "-q", "--depth", "1", Path(REPO).as_uri(), SHALLOW_REPO)
 
 # --- The output the gate does not write itself -------------------------------
 #
@@ -210,6 +225,20 @@ CASES = [
     ("a term in the scanned path survives neither the banner nor a failure",
      f"{PATH_PLANTED}:{PLANTED}", True, ["private term #2", "notes.txt"],
      ["private term #1"], PATH_REPO),
+    # The refusals are deliberate deaths, and each one names the path it
+    # refused. Both halves are asserted: the *right* refusal fired — a
+    # shallow clone must not fall through to a scan CI would then trust, and
+    # a non-repo must die by name rather than of whatever a later git call
+    # hits — and the path it names went out through the censor, which the
+    # every-case check below verifies against the plant.
+    # "is not a git repository" and not just "not a git repository": with the
+    # refusal deleted, the next git call dies and git's own passed-through
+    # stderr says "fatal: not a git repository" — the gate's sentence is the
+    # only needle that proves the gate's refusal fired.
+    ("the not-a-repository refusal is censored, and still fires by name",
+     PATH_PLANTED, True, ["is not a git repository", MASK], [], NOT_REPO),
+    ("the shallow-clone refusal is censored, and still fires by name",
+     PATH_PLANTED, True, ["shallow clone", MASK], [], SHALLOW_REPO),
     # A death the gate did not plan for. Nonzero is not the interesting half —
     # the interpreter has always done that — so this asserts the traceback
     # arrived *and* came through the censor, and leaves "and said nothing else"

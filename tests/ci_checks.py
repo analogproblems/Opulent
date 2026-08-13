@@ -77,10 +77,18 @@ for m in members():
         raise SystemExit(
             f"{CHANGELOG}: no release entry for {m.name} {manifest['version']} "
             f"(the version in {m.manifest}) — a shipped version needs a heading")
-    if logged[0][0] > ver:
+    # The FIRST heading is the one a reader takes for the current release, so
+    # it must equal the manifest AND be the maximum present — "first by
+    # document order" alone would bless a new entry filed under the old ones.
+    if logged[0][0] != ver:
         raise SystemExit(
-            f"{CHANGELOG}: newest {m.name} entry is {logged[0][1]}, ahead of "
-            f"{manifest['version']} in {m.manifest} — the manifest was not bumped")
+            f"{CHANGELOG}: first {m.name} heading is {logged[0][1]}, but "
+            f"{m.manifest} says {manifest['version']} — the shipped version "
+            f"must lead the changelog")
+    if logged[0][0] != max(v for v, _ in logged):
+        raise SystemExit(
+            f"{CHANGELOG}: first {m.name} heading {logged[0][1]} is not the "
+            f"highest version present — entries must be newest-first")
     print(f"released in {CHANGELOG}: {m.name} {manifest['version']}")
 
 # The eco twin is a deliberate copy: same model, same charter, one effort rung
@@ -196,6 +204,52 @@ if CODER_LINE not in CONTEXT:
         "eco substitution replaces nothing and silently does nothing")
 print("session-start's eco substitution has something to substitute")
 
+# The lane roster, pinned across every surface that names it. Derived from
+# agents/*.md frontmatter, so a renamed or deleted lane fails here instead of
+# leaving a policy, a doctor and a README pointing at an agent that is not
+# registered — the exact failure the ECO_TWIN block guards, previously
+# unguarded for the other six. Names and models are pinned, not prose.
+AGENTS = {}
+for fn in sorted(os.listdir(os.path.join(REPO, "agents"))):
+    if not fn.endswith(".md"):
+        continue
+    fr, _ = agent_parts(os.path.join("agents", fn))
+    if not fr.get("name") or not fr.get("model"):
+        raise SystemExit(f"agents/{fn}: frontmatter must carry name and model")
+    AGENTS[fr["name"]] = fr["model"].strip().lower()
+if len(AGENTS) != 7:
+    raise SystemExit(
+        f"agents/: expected the seven lane definitions, found {len(AGENTS)}: "
+        f"{', '.join(sorted(AGENTS))}")
+PRIMARY = sorted(n for n in AGENTS if n != "coder-eco")
+if len(PRIMARY) != 6:
+    raise SystemExit(f"agents/: expected six primary lanes beside coder-eco, "
+                     f"found {', '.join(PRIMARY)}")
+with open(os.path.join(REPO, "commands", "doctor.md"), encoding="utf-8") as fh:
+    doctor_text = fh.read()
+with open(os.path.join(REPO, "README.md"), encoding="utf-8") as fh:
+    readme_text = fh.read()
+for name in PRIMARY:
+    lane = "opulent:" + name
+    for where, text in (("hooks/session-start.py CONTEXT", CONTEXT),
+                        ("commands/doctor.md", doctor_text),
+                        ("README.md", readme_text)):
+        if lane not in text:
+            raise SystemExit(f"{where}: lane {lane} is registered in agents/ "
+                             f"but never named here")
+for name, model in sorted(AGENTS.items()):
+    lane = "opulent:" + name
+    rows = [l for l in readme_text.splitlines() if lane in l and "|" in l]
+    if not rows:
+        raise SystemExit(f"README.md: no routing-table row names {lane}")
+    for row in rows:
+        if model not in row.lower():
+            raise SystemExit(
+                f"README.md: the {lane} row does not say {model} — the table "
+                f"and agents/{name}.md disagree on the model: {row!r}")
+print("lane roster pinned across agents/, session-start, doctor.md, README: "
+      + ", ".join(PRIMARY))
+
 
 def lane_line(context, where):
     """The policy's implementation-lane line. Asserting on the whole document
@@ -268,5 +322,81 @@ if "0 denials" not in summary:
         "session-start: the eco redirect is being counted as a denial — that is "
         "the counter it was given its own event to keep honest")
 print("session-start reports eco redirects without inflating the denial count")
+
+# The commonest post-0.9.0 session shape is edits and test runs with no
+# denial at all; an activity line that omitted them reported that session as
+# silence. Removals and unparsed commands are report-when-seen, like probes.
+with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+    fh.write('{"t": "2026-08-13T00:00:00+00:00", "event": "edit", "detail": "/p/app.py"}\n')
+    fh.write('{"t": "2026-08-13T00:00:01+00:00", "event": "test", "detail": "pytest -q"}\n')
+    fh.write('{"t": "2026-08-13T00:00:02+00:00", "event": "remove", "detail": "/p/old.py"}\n')
+    fh.write('{"t": "2026-08-13T00:00:03+00:00", "event": "unparsed", "detail": "echo x"}\n')
+    activity_log = fh.name
+try:
+    act = subprocess.run([sys.executable, hook], capture_output=True, text=True,
+                         timeout=30, env=dict(plain_env, OPULENT_LOG=activity_log))
+    act_summary = json.loads(act.stdout)["hookSpecificOutput"]["additionalContext"]
+finally:
+    os.unlink(activity_log)
+for needle in ("1 edits", "1 test runs", "0 delegations", "0 denials",
+               "1 removals", "1 unparsed commands"):
+    if needle not in act_summary:
+        raise SystemExit(
+            f"session-start: activity line does not report {needle!r} for a "
+            f"log holding exactly that — the record's staple events must be "
+            f"counted out loud")
+print("session-start counts edits, test runs, removals and unparsed commands")
+
+# A fresh install has an empty (or absent) log; the model must still learn
+# the log path, or the record is unfindable exactly when it matters most.
+with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+    empty_log = fh.name
+try:
+    quiet = subprocess.run([sys.executable, hook], capture_output=True, text=True,
+                           timeout=30, env=dict(plain_env, OPULENT_LOG=empty_log))
+    quiet_ctx = json.loads(quiet.stdout)["hookSpecificOutput"]["additionalContext"]
+finally:
+    os.unlink(empty_log)
+if "No routing activity recorded yet" not in quiet_ctx or empty_log not in quiet_ctx:
+    raise SystemExit(
+        "session-start: a session with an empty log must still say so and "
+        "name the log path")
+print("session-start names the log path even before any activity")
+
+# Under OPULENT_OFF the note says "no routing log is being written"; printing
+# activity counts (or the no-activity line) directly under it would contradict
+# it on the same screen. The policy alone, plus the OFF note, is the contract.
+with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+    fh.write('{"t": "2026-08-13T00:00:00+00:00", "event": "edit", "detail": "/p/app.py"}\n')
+    off_log = fh.name
+try:
+    off = subprocess.run([sys.executable, hook], capture_output=True, text=True,
+                         timeout=30,
+                         env=dict(plain_env, OPULENT_LOG=off_log, OPULENT_OFF="1"))
+    off_ctx = json.loads(off.stdout)["hookSpecificOutput"]["additionalContext"]
+finally:
+    os.unlink(off_log)
+if "Enforcement is OFF" not in off_ctx:
+    raise SystemExit("session-start: OPULENT_OFF context is missing the OFF note")
+if "routing activity" in off_ctx:
+    raise SystemExit(
+        "session-start: OPULENT_OFF says no log is written, but an activity "
+        "line prints beneath it — the two must not contradict on one screen")
+print("session-start suppresses the activity line under OPULENT_OFF")
+
+# The description users read in /plugin comes from the marketplace entry; the
+# manifest carries its own copy. Two hand-maintained copies of one sentence
+# drift, and the drifted one is whichever copy the reader happens to see.
+with open(os.path.join(REPO, ".claude-plugin", "plugin.json")) as f:
+    _plug = json.load(f)
+with open(os.path.join(REPO, ".claude-plugin", "marketplace.json")) as f:
+    _mkt = json.load(f)
+for entry in _mkt.get("plugins", []):
+    if entry.get("name") == _plug.get("name") and \
+            entry.get("description") != _plug.get("description"):
+        raise SystemExit(
+            f"marketplace description for {_plug.get('name')!r} has drifted "
+            f"from plugin.json's — the two must stay one sentence")
+print("marketplace and plugin descriptions match")
 
 print("\nall CI checks passed")
