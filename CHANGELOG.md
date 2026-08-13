@@ -10,6 +10,80 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.11.2 — 2026-08-13
+
+**What the review found.** Five fresh-context lenses over the public state
+found 23 defects that reproduce, and the sharpest of them were in the two
+things this plugin sells: the record, and the gate.
+
+**The gate scanned the wrong corpus.** `tests/public_gate.py` read `git log
+--all -p` while its docstring claimed the object database, and those are not
+the same set: `log -p` renders reachable-history *diffs*. It could not see
+merge-commit conflict resolutions (`-p` prints no patch for a merge),
+unreachable and reflog-held objects, binary blobs, annotated tag messages,
+committer identity, or refs outside heads/remotes. This was not theoretical —
+the gate certified this very checkout clean while all ten stored terms sat in
+its object database, in objects `log` cannot reach. It now enumerates every
+object via `cat-file --batch-all-objects`, trees included, because a filename
+is residue too. `censor()` was locating matches in a `.lower()` copy and
+slicing the original; since `str.lower()` is not length-preserving, a
+character like U+0130 ahead of a match slid the mask right until the term
+printed **in full**, directly above the line promising it never does — matches
+are now found in the string being edited. Terms also split on newlines (a
+multi-line CI secret used to match nothing and report clean) and compare in
+both Unicode normal forms (an accented name spelled the other way used to
+miss). New `tests/gate_corpus_selftest.py` plants residue in each blind spot:
+9/9 against this gate, 2/9 against the old one.
+
+**The write guard had holes that cost the audit line as well as the denial.**
+`git -C <dir> apply` bypassed the patch guard entirely — the subcommand search
+took `-C`'s operand for the subcommand — with no denial *and no log entry*.
+`git apply --directory=`, `patch -d` and `patch -o` wrote where the headers
+never pointed, and the record named the innocent path. `tee` and `touch`
+judged only their first operand; `cp -t`/`mv -t` judged the source, since `-t`
+puts the destination first. A prefix carrying a flag (`sudo -u root cp`)
+blanked detection of the command behind it. `sed --in-place` was unrecognised.
+A `./`-prefixed header under `-p1` lost one component too many. A lone
+positional suppressed the `< patch` fallback. The control-plane check was
+case-sensitive on the two platforms the README claims it holds for. All
+closed, all with cases that fail against the previous hook.
+
+**Dials that lied.** `OPULENT_OFF=0`, `=false`, `=no` and `=off` each disabled
+every denial for the session — truthiness on a string — and `OPULENT_ECO=0`
+turned eco on. Both now read `0/false/no/off/empty` as off. `OPULENT_OFF`
+sessions also got the full policy injected, announcing enforcement that was
+not running and logging nothing that could contradict it; the policy now says
+when enforcement is off. The activity summary counted quoted substrings
+rather than parsing its own JSON, so writing a file named `deny` or `eco`
+fabricated a denial and an eco redirect — precisely the number the separate
+`probe` and `eco` events exist to keep honest. And a single non-UTF-8 byte in
+the log raised through `except OSError` and killed the *entire* policy
+injection, silently, while the routing hook kept enforcing against a policy
+the model never received.
+
+**Tests that a no-op could pass.** Mutation testing showed a two-line hook
+that does nothing passing 71 of 120 cases. `hookEventName` — the discriminator
+telling the consumer which event a decision belongs to — was asserted nowhere,
+so corrupting it left all 120 green; it is now checked on every case that
+produces output. `e2e_smoke.py`'s denial check asserted on the model's
+narration using three strings that also appear in the injected policy, so a
+model that never attempted the write passed while the hook sat idle; it now
+reads the `deny` event out of the routing log, which only the hook can write.
+The suite gained 24 cases and both self-tests take a path override, so they
+can be pointed at an older copy and watched to fail.
+
+**Descriptions that had been false since 0.9.0.** Four agent files still told
+users "the main loop cannot edit source files" / "cannot run these directly",
+which 0.9.0 stopped being true and the README already contradicted. They now
+state the routing default. The injected policy said "Never run these
+directly" one screen above "make that call yourself"; the first is gone. The
+README gained a Requirements section (Python 3 was an undeclared runtime
+dependency, and the fail-open rule cannot cover it — it lives inside the
+interpreter that would not have started) and a concrete recipe for setting the
+dials, which the previous text described only as "in the environment" —
+leaving the three places people actually try, one of which is denied by this
+plugin's own control-plane guard.
+
 ## opulent 0.11.1 — 2026-08-09
 
 **Metadata refresh.** Version bump only, so installed copies re-fetch the

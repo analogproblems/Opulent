@@ -1,6 +1,6 @@
 ---
 name: coder
-description: Complex implementation — new features, tricky bug fixes, multi-file refactors, anything needing deep reasoning about code. MUST BE USED for all non-trivial code changes; the main loop cannot edit source files.
+description: Complex implementation — new features, tricky bug fixes, multi-file refactors, anything needing deep reasoning about code. MUST BE USED for all non-trivial code changes; the main loop delegates implementation rather than writing it itself.
 model: opus
 effort: max
 ---

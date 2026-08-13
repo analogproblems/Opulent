@@ -1,6 +1,6 @@
 ---
 name: test-runner
-description: Runs tests, builds, linters, and typechecks, then diagnoses failures. MUST BE USED for all test/build/lint execution; the main loop cannot run these directly.
+description: Runs tests, builds, linters, and typechecks, then diagnoses failures. MUST BE USED for test/build/lint execution beyond a quick one-off check; the main loop delegates verification rather than doing it itself.
 model: sonnet
 effort: xhigh
 tools: Bash, Read, Grep, Glob

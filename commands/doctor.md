@@ -68,8 +68,10 @@ Verdict, one line — append `· ECO` when `OPULENT_ECO` is set, since a session
 running one rung down should say so: **LIVE** · **OFF** (by OPULENT_OFF — intentional) ·
 **PARTIAL** (say which half works) · **DEAD** (installed but not enforcing —
 recommend checking the plugin's enable state in /plugin, restarting the
-session so hooks reload, and `claude plugin marketplace update opulent` for
-version drift).
+session so hooks reload, and — for version drift — BOTH
+`claude plugin marketplace update opulent` and then
+`claude plugin update opulent@opulent`, since the first refreshes only the
+marketplace cache and moves nothing on its own).
 
 **Mid-session enable warning.** Plugin enable/disable takes effect only at
 session start: enabling Opulent mid-session registers neither its hooks nor

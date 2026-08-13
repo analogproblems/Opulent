@@ -14,7 +14,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-HOOK = str(Path(__file__).resolve().parent.parent / "hooks" / "route-models.py")
+# Overridable so the suite can be pointed at an OLD copy of the hook and
+# watched to fail. A guard case that has never failed is a guard case nobody
+# has checked — and 71 of the 120 cases this suite had in 2026-08 were
+# satisfied by a hook that did nothing at all.
+HOOK = os.environ.get("ROUTE_HOOK_PATH") or str(
+    Path(__file__).resolve().parent.parent / "hooks" / "route-models.py")
 HOME = os.path.expanduser("~")
 TMP = tempfile.gettempdir()
 
@@ -55,6 +60,14 @@ def run(payload, env_extra=None, field="permissionDecision"):
         d = json.loads(out)["hookSpecificOutput"]
     except Exception:
         return f"ERROR(bad output: {out!r})"
+    # The discriminator, asserted on every case that produces output. Without
+    # this the suite read `permissionDecision` and never the key that tells the
+    # consumer which event the decision is even about: corrupting or deleting
+    # `hookEventName` left all 120 cases green while turning every denial in
+    # the plugin into output nothing has a reason to apply. Two lines, and they
+    # cover all 45 deny cases at once.
+    if d.get("hookEventName") != "PreToolUse":
+        return f"ERROR(hookEventName={d.get('hookEventName')!r})"
     if field not in d:
         # Deliberately quotes nothing of the payload: an error string that
         # embedded the output would carry the reason text inside it, and a
@@ -192,6 +205,27 @@ NOT_A_PATCH = patch_file("notes.txt", (
     "--- groceries ---\n"
     "- milk\n"
     "+ eggs\n"))
+# A header naming its target through `./`. Both git and patch consume that as
+# the component -p1 strips, so stripping it before applying the level took one
+# component too many and the control-plane path stopped being one.
+DOT_PATCH = patch_file("dot.patch", (
+    "--- ./.claude/settings.json\n"
+    "+++ ./.claude/settings.json\n"
+    "@@ -1 +1 @@\n"
+    "-{}\n"
+    '+{"hooks": {}}\n'))
+# A named pipe, which blocks in open() until something writes to it. Not a
+# patch at all — the point is that reading it must not cost the session its
+# verdict. Created here rather than by patch_file() because it is the one
+# fixture whose whole nature is that it is not a regular file.
+FIFO_PATCH = os.path.join(PATCH_DIR, "pipe.patch")
+try:
+    os.mkfifo(FIFO_PATCH)
+except (AttributeError, OSError):
+    # No mkfifo (Windows), or no permission: fall back to a plain file so the
+    # case still runs and simply proves the ordinary path, rather than
+    # vanishing silently and taking its coverage with it.
+    FIFO_PATCH = patch_file("pipe.patch", "not a patch\n")
 
 CASES = [
     # --- Edit/Write: the main loop writes, and the write is logged ---
@@ -257,6 +291,57 @@ CASES = [
     # The shell honours the LAST `<`, so that is the file actually applied.
     ("main patch double redirect",    bash("patch -p1 < " + SRC_PATCH + " < " + SETTINGS_PATCH, cwd=CWD), "deny"),
     ("main git apply double redirect", bash("git apply < " + SRC_PATCH + " < " + SETTINGS_PATCH, cwd=CWD), "deny"),
+    # --- 2026-08-13 review: each of these was ALLOWED, most of them silently.
+    # Every case below was traced against the real tool before being written,
+    # and every one of them fails against the hook as it stood.
+    #
+    # A git global option that takes a separate value used to swallow the
+    # subcommand search, so the whole apply branch never ran: no denial, and no
+    # log line either. The `=` spellings always worked, which is why it lasted.
+    ("main git -C apply settings",    bash("git -C . apply " + SETTINGS_PATCH, cwd=CWD), "deny"),
+    ("main git --git-dir apply",      bash("git --git-dir .git apply " + SETTINGS_PATCH, cwd=CWD), "deny"),
+    # The tool applies INTO a directory the headers never mention, so an
+    # innocent header was judged while a control-plane file was rewritten —
+    # and the audit line named the innocent one.
+    ("main git apply --directory",    bash("git apply --directory=.claude/hooks " + SRC_PATCH, cwd=CWD), "deny"),
+    ("main patch -d control dir",     bash("patch -d .claude/hooks -p1 < " + SRC_PATCH, cwd=CWD), "deny"),
+    ("main patch -o control file",    bash("patch -p1 -o .claude/hooks/x.py < " + SRC_PATCH, cwd=CWD), "deny"),
+    # GNU patch reads the patch from stdin when given one positional, so the
+    # positional is the file being patched — consulting the redirect only when
+    # no positional existed made this exact spelling allowed.
+    ("main patch positional + stdin", bash("patch -p1 x.py < " + SETTINGS_PATCH, cwd=CWD), "deny"),
+    # Both tools consume `./` as the component -p1 strips.
+    ("main patch ./ header -p1",      bash("patch -p1 < " + DOT_PATCH, cwd=CWD),        "deny"),
+    # tee and touch write EVERY operand; a decoy first argument hid the rest.
+    ("main tee decoy then settings",  bash("ls | tee decoy.txt " + os.path.join(HOME, ".claude", "settings.json")), "deny"),
+    ("main touch decoy then hook",    bash("touch decoy.txt " + os.path.join(HOME, ".claude", "hooks", "x.py")), "deny"),
+    # -t puts the destination FIRST, so "last operand is the destination" was
+    # exactly backwards — and the log named the source file instead.
+    ("main cp -t into hooks",         bash("cp -t " + os.path.join(HOME, ".claude", "hooks") + " evil.py"), "deny"),
+    ("main mv -t into agents",        bash("mv -t " + os.path.join(HOME, ".claude", "agents") + " a.md"), "deny"),
+    # A prefix's own flag used to blank the detection of the command behind it.
+    ("main sudo -u root cp hook",     bash("sudo -u root cp x.py " + os.path.join(HOME, ".claude", "hooks", "h.py")), "deny"),
+    ("main nice -n 10 cp hook",       bash("nice -n 10 cp x.py " + os.path.join(HOME, ".claude", "hooks", "h.py")), "deny"),
+    # ... but a prefix flag that takes NO value must not swallow the command.
+    ("main sudo -n cp ordinary",      bash("sudo -n cp a.txt b.txt", cwd=CWD),          "allow"),
+    # GNU sed's documented long form.
+    ("main sed --in-place settings",  bash("sed --in-place s/a/b/ " + os.path.join(HOME, ".claude", "settings.json")), "deny"),
+    ("main sed --in-place= settings", bash("sed --in-place=bak s/a/b/ " + os.path.join(HOME, ".claude", "settings.json")), "deny"),
+    # Case-insensitive filesystems name the same files the guard protects, on
+    # the two platforms the README claims this holds for.
+    ("main Write .CLAUDE hooks",      edit("Write", os.path.join(HOME, ".CLAUDE", "hooks", "x.py")), "deny"),
+    ("main Write .claude Hooks",      edit("Write", os.path.join(HOME, ".claude", "Hooks", "x.py")), "deny"),
+    ("main Write Settings.json",      edit("Write", os.path.join(HOME, ".claude", "Settings.json")), "deny"),
+    # A dial whose off position is indistinguishable from its on position is
+    # not a dial: these four spellings all disabled every denial.
+    ("OPULENT_OFF=0 still enforces",  edit("Write", os.path.join(HOME, ".claude", "settings.json")), "deny", {"OPULENT_OFF": "0"}),
+    ("OPULENT_OFF=false enforces",    edit("Write", os.path.join(HOME, ".claude", "settings.json")), "deny", {"OPULENT_OFF": "false"}),
+    ("OPULENT_OFF=no enforces",       edit("Write", os.path.join(HOME, ".claude", "settings.json")), "deny", {"OPULENT_OFF": "no"}),
+    ("OPULENT_OFF=1 disables",        edit("Write", os.path.join(HOME, ".claude", "settings.json")), "allow", {"OPULENT_OFF": "1"}),
+    # A named pipe blocks open() forever; the size cap bounds how much is read,
+    # not whether the read returns. isfile() rejects it, and the ERROR() a hang
+    # would produce is what this case is really watching for.
+    ("main git apply a FIFO",         bash("git apply " + FIFO_PATCH, cwd=CWD),         "allow"),
     # Fail open: an unreadable or unparseable patch must never block a session.
     ("main patch file is missing",    bash("git apply " + MISSING_PATCH, cwd=CWD),      "allow"),
     ("main patch file is not a patch", bash("patch -p1 < " + NOT_A_PATCH, cwd=CWD),     "allow"),

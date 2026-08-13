@@ -1,6 +1,6 @@
 ---
 name: coder-eco
-description: Eco twin of the coder lane — the same complex-implementation charter, one effort rung down. MUST BE USED for all non-trivial code changes when OPULENT_ECO is set for the session; the main loop cannot edit source files.
+description: Eco twin of the coder lane — the same complex-implementation charter, one effort rung down. MUST BE USED for all non-trivial code changes when OPULENT_ECO is set for the session; the main loop delegates implementation rather than writing it itself.
 model: opus
 effort: xhigh
 ---

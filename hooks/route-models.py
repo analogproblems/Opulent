@@ -100,6 +100,31 @@ _REDIRECTS = {">", ">>", ">|", "&>", "&>>"}
 _INPUT_REDIRECT = "<"
 _CMD_PREFIXES = {"sudo", "command", "time", "env", "xargs", "nice"}
 
+# Which of a prefix's own options carry a separate value. Per prefix, because
+# the same letter means different things: `nice -n 10` consumes its operand
+# and `sudo -n` does not, so one shared table would either swallow the wrapped
+# command or leave a stray operand sitting at command position.
+_PREFIX_VALUE_OPTS = {
+    "sudo": {"-u", "-g", "-p", "-C", "-h", "-r", "-t", "-U"},
+    "nice": {"-n", "--adjustment"},
+    "env": {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"},
+    "xargs": {"-I", "-i", "-n", "-P", "-d", "-E", "-L", "-s",
+              "--replace", "--max-args", "--max-procs", "--delimiter"},
+    "time": {"-o", "-f", "--output", "--format"},
+    "command": set(),
+}
+
+# `cp`/`mv -t DIR src...` — the destination comes FIRST, which makes the usual
+# "last operand is the destination" precisely backwards. This is the spelling
+# `find -exec` and `xargs` generate, so it arrives by accident.
+_TARGET_DIR_OPTS = {"-t", "--target-directory"}
+
+# sed/perl in-place, including GNU's documented long form. The old test was
+# `^-\w*i`, which requires `i` to follow word characters after a single dash —
+# so `--in-place` (and `--in-place=bak`) failed it and edited settings files
+# with no denial and no audit line.
+_INPLACE_RE = re.compile(r"^(?:-\w*i|--in-place(?:=|$))")
+
 # Scratch: allowed and NOT logged, because an audit trail of temp files is
 # noise that buries the project edits it exists to surface.
 _CLAUDE_DIR = os.path.normpath(os.path.join(HOME, ".claude"))
@@ -120,7 +145,16 @@ _SETTINGS_RE = re.compile(r"^settings(\.[\w-]+)*\.json$")
 # sentinel, and a sentinel matches no rule at all. Matching the `---`/`+++`
 # lines as a *pair* is what keeps a removed line of the form `-- foo` — which
 # renders as `--- foo` inside a hunk — from being read as a header.
-_PATCH_PAIR_RE = re.compile(r"^--- ([^\t\r\n]+)[^\r\n]*\r?\n\+\+\+ ([^\t\r\n]+)", re.M)
+# One character class per position, and every quantifier bounded. The earlier
+# spelling put `([^\t\r\n]+)` directly in front of `[^\r\n]*`: both classes
+# accept the same characters, so a long `---` line with no `+++` after it made
+# the engine re-split it every possible way. Measured quadratic, projecting to
+# HOURS at the read cap below — and reachable by accident, since a removed line
+# of the form `-- foo` renders as `--- foo` inside a hunk, so one deleted
+# minified line is enough. The tab-suffix that the second class used to eat is
+# now cut in _header_path, where it costs nothing.
+_PATCH_PAIR_RE = re.compile(
+    r"^--- ([^\r\n]{1,4096})\r?\n\+\+\+ ([^\r\n]{1,4096})", re.M)
 
 # The `diff --git a/x b/y` line, which is the ONLY place some patches name
 # their targets: a pure rename, a mode-only change and a binary diff all carry
@@ -130,7 +164,11 @@ _PATCH_PAIR_RE = re.compile(r"^--- ([^\t\r\n]+)[^\r\n]*\r?\n\+\+\+ ([^\t\r\n]+)"
 # hunk line (which always begins with ' ', '+' or '-') can never pose as one.
 # The rest of the line is captured whole because the two names are not always
 # separable on whitespace — see _diff_git_paths.
-_PATCH_DIFF_RE = re.compile(r"^diff --git (.+?)[ \t]*\r?$", re.M)
+# Bounded and unambiguous for the same reason as the pair above: `(.+?)`
+# followed by `[ \t]*` let a run of spaces be divided between the two, and a
+# `diff --git` line carrying one blew up identically. Trailing whitespace is
+# stripped in code instead.
+_PATCH_DIFF_RE = re.compile(r"^diff --git ([^\r\n]{1,4096})$", re.M)
 
 # The two names on that line, when neither of them hides a space. Each side is
 # independently either C-quoted — git quotes a name with non-ASCII bytes, and
@@ -164,6 +202,20 @@ _PATCH_READ_LIMIT = 2 * 1024 * 1024
 # stay refused now that ordinary writes are not, or the probe would report
 # enforcement dead the moment this hook started allowing things.
 CANARY = "opulent-doctor-canary"
+
+
+# A dial is read the way a person means it. `os.environ.get(name)` alone is
+# truthiness on a string, so OPULENT_OFF=0 and OPULENT_OFF=false — the two
+# spellings someone reaches for to mean "leave enforcement ON" — silently
+# disabled every denial for the whole session, and OPULENT_ECO=0 turned eco on.
+# A dial whose off position is indistinguishable from its on position is not a
+# dial.
+_OFF_VALUES = {"", "0", "false", "no", "off"}
+
+
+def dial(name):
+    """True when the named session dial is set to something meaning yes."""
+    return os.environ.get(name, "").strip().lower() not in _OFF_VALUES
 
 
 def _beneath(path, prefix):
@@ -200,9 +252,18 @@ def is_control_plane(target, cwd=None):
     a plugin's source repo, which changes nothing until it is installed — is
     ordinary code."""
     p = _resolve(target, cwd)
-    if os.path.basename(p).startswith(".env"):
+    # Compared case-folded, because the guard has to hold on the platforms the
+    # README says it holds on. APFS (the macOS default) and Windows are
+    # case-insensitive, so `~/.CLAUDE/hooks/x.py` and `~/.claude/Settings.json`
+    # name the very files this protects, and a case-sensitive comparison
+    # allowed both. Folding cannot introduce a miss anywhere: the canonical
+    # spelling is already lowercase, so every path that matched before still
+    # matches. On a case-sensitive filesystem it can over-deny a genuinely
+    # different `.CLAUDE` directory — the safe direction, and the denial says
+    # which path it objected to.
+    if os.path.basename(p).lower().startswith(".env"):
         return True
-    parts = p.replace("\\", "/").split("/")
+    parts = [q.lower() for q in p.replace("\\", "/").split("/")]
     for i, part in enumerate(parts):
         if part != ".claude" or i + 1 >= len(parts):
             continue
@@ -235,12 +296,29 @@ def _strip_candidates(path, level):
     git apply assumes 1, GNU patch strips to the basename — so rather than
     guess we judge every suffix. Over-reading costs a delegation; under-
     reading costs the guarantee."""
-    parts = [p for p in path.replace("\\", "/").split("/") if p and p != "."]
-    if level == 0:
-        return ["/".join(parts)] if parts else []
-    if level == 1:
-        return ["/".join(parts[1:])] if len(parts) > 1 else []
-    return ["/".join(parts[i:]) for i in range(len(parts))]
+    # `.` components are dropped AFTER the level is applied, never before.
+    # Both git and patch count `./` as a component and consume it as the
+    # stripped one, so removing it first made -p1 eat the component after it:
+    # a `./`-prefixed header naming a control-plane file was judged on the
+    # remainder and allowed, and a `./`-prefixed creation produced no
+    # candidate at all and went unlogged.
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+
+    def clean(seq):
+        return "/".join([p for p in seq if p != "."])
+
+    if level in (0, 1):
+        out = clean(parts[level:])
+        return [out] if out else []
+    return [c for c in (clean(parts[i:]) for i in range(len(parts))) if c]
+
+
+def _header_path(raw):
+    """A `---`/`+++` header's path: everything before the tab a context diff
+    uses to carry a timestamp. The regex captures the whole line now — one
+    unambiguous class, so it cannot backtrack — and the cut happens here,
+    where it is a string operation rather than a second overlapping class."""
+    return raw.split("\t", 1)[0]
 
 
 def _unquote(path):
@@ -305,32 +383,68 @@ def _patch_sources(args, stdin_file, every_positional=False):
         if a.startswith("--input="):
             return [a.split("=", 1)[1]]
     positional = [a for a in args if not a.startswith("-")]
-    if positional:
-        return positional if every_positional else positional[-1:]
-    return [stdin_file] if stdin_file else []
+    # The redirect is ALWAYS a candidate, never a fallback. GNU patch is
+    # documented `patch [options] [origfile [patchfile]]` and reads the patch
+    # from stdin when given one positional — so with `patch -p1 x.py < p.patch`
+    # the positional is the file being patched and the redirect is the patch.
+    # Consulting the redirect only when no positional existed meant that exact
+    # spelling was allowed while the bare `patch -p1 < p.patch` was denied.
+    #
+    # Over-reading is the safe direction and the docstring above says so: a
+    # candidate that is not a patch yields no headers and contributes nothing.
+    # So every positional is offered too, for `patch` as much as for git apply,
+    # rather than betting on which one is the patch.
+    sources = ([stdin_file] if stdin_file else []) + (
+        positional if (every_positional or stdin_file) else positional[-1:])
+    return [s for i, s in enumerate(sources) if s and s not in sources[:i]]
 
 
-def _patch_targets(sources, level, cwd):
+def _patch_targets(sources, level, cwd, prefix=""):
     """The files the given patches say they write, read out of the patches
     themselves. Every source is read: git applies all of them, so a check that
     stopped at one would leave the rest unseen.
+
+    `prefix` is the directory the tool will apply INTO — `git apply
+    --directory=x`, `patch -d x`. Without it the header path was judged on its
+    own while the tool wrote somewhere else entirely, so a control-plane
+    rewrite was both allowed and recorded under the innocent name the header
+    happened to carry.
 
     Empty when a patch cannot be found, read or parsed: a hook that cannot
     read a patch must not block the session. Nothing here is a barrier —
     a patch piped in (`cat p | git apply`), a context diff, or one written by
     the same command that applies it all sail through. It closes the accident
     of a control-plane rewrite arriving as a patch, not the attack."""
-    targets = []
+    targets, seen = [], set()
+
+    def add(candidate):
+        # Set-backed dedup: the list scan this replaced was O(n) per candidate,
+        # and _strip_candidates yields one per path component, so a patch whose
+        # header held a deep path cost time quadratic in its own depth.
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            targets.append(os.path.join(prefix, candidate) if prefix
+                           else candidate)
+
     for source in sources:
         if not source:
             continue
+        resolved = _resolve(source, cwd)
+        # isfile() before open(): a named pipe blocks in open() until someone
+        # writes to it, with no timeout and nothing the size cap can do about
+        # it — the hook simply never returns a verdict. One check rejects
+        # FIFOs, directories, and device nodes together.
+        if not os.path.isfile(resolved):
+            continue
         try:
-            with open(_resolve(source, cwd), errors="replace") as fh:
+            with open(resolved, errors="replace") as fh:
                 text = fh.read(_PATCH_READ_LIMIT)
         except OSError:
             continue  # unreadable patch: fail open on this one, judge the rest
-        headers = list(_PATCH_PAIR_RE.findall(text))
-        headers += [_diff_git_paths(rest) for rest in _PATCH_DIFF_RE.findall(text)]
+        headers = [(_header_path(a), _header_path(b))
+                   for a, b in _PATCH_PAIR_RE.findall(text)]
+        headers += [_diff_git_paths(rest.rstrip(" \t"))
+                    for rest in _PATCH_DIFF_RE.findall(text)]
         for pair in headers:
             for path in pair:
                 # /dev/null is a file being created or deleted; the other side
@@ -338,16 +452,58 @@ def _patch_targets(sources, level, cwd):
                 if path == "/dev/null":
                     continue
                 for candidate in _strip_candidates(path, level):
-                    if candidate not in targets:
-                        targets.append(candidate)
+                    add(candidate)
         # A rename names both its ends outright, with no a/ or b/ to strip —
         # so these are judged at level 0, and they are the only headers a
         # spaced-name rename leaves that can be read at all.
         for path in _PATCH_RENAME_RE.findall(text):
             for candidate in _strip_candidates(_unquote(path), 0):
-                if candidate not in targets:
-                    targets.append(candidate)
+                add(candidate)
     return targets
+
+
+# git's global options that carry their value as a SEPARATE token. Skipping
+# the option without its operand is what let `git -C <dir> apply` through: the
+# subcommand search took the first token that was neither option-like nor had
+# an `=`, which is the directory, decided it was not "apply", and left the
+# patch unread — no denial, and no log line either. The `=` spellings never
+# had the problem, which is why the bug survived: `--git-dir=x apply` works.
+_GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace",
+                   "--exec-path", "--config-env", "--super-prefix"}
+
+
+def _git_subcommand(args):
+    """(subcommand, its arguments) for a git invocation, or ("", [])."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in _GIT_VALUE_OPTS:
+            i += 2          # the option AND the value it consumes
+            continue
+        if a.startswith("-"):
+            i += 1          # a flag, or an `--opt=value` that eats no token
+            continue
+        return a, args[i + 1:]
+    return "", []
+
+
+# Where a patch tool will apply INTO, when it is told to apply somewhere other
+# than the working directory. `git apply --directory=x`, `patch -d x`.
+_DIR_OPTS = {"--directory", "-d"}
+# `patch -o FILE` writes its result to FILE rather than to the patched file,
+# which makes FILE a write target the headers never mention.
+_OUT_OPTS = {"-o", "--output"}
+
+
+def _opt_value(args, names):
+    """The value of the first of `names` present, in either spelling."""
+    for k, a in enumerate(args):
+        if a in names and k + 1 < len(args):
+            return args[k + 1]
+        for n in names:
+            if a.startswith(n + "="):
+                return a.split("=", 1)[1]
+    return ""
 
 
 def _segment_args(tokens, i):
@@ -419,36 +575,53 @@ def bash_write_targets(cmd, cwd=None):
             base = tok.rsplit("/", 1)[-1]
             if base in _CMD_PREFIXES or ("=" in tok and not tok.startswith("-")):
                 i += 1
+                # A prefix's own flags belong to the prefix, not to the command
+                # it wraps. Without this, `sudo cp ...` was denied while
+                # `sudo -u root cp ...` was allowed and unlogged: `-u` fell
+                # through, cmdpos went false, and the `cp` behind it was never
+                # examined. Not an exotic utility — the same utility, with an
+                # option.
+                vals = _PREFIX_VALUE_OPTS.get(base, set())
+                while i < len(tokens) and tokens[i].startswith("-"):
+                    i += 2 if (tokens[i] in vals and i + 1 < len(tokens)) else 1
                 continue  # still at command position
             args = _segment_args(tokens, i)
             paths = [a for a in args if not a.startswith("-")]
             if base == "tee":
-                found.extend(paths[:1])
+                found.extend(paths)          # tee writes EVERY operand
             elif base in ("sed", "perl"):
                 # The edited files are the arguments — naming them, rather than
                 # a sentinel, is what lets an in-place edit of a settings file
                 # be judged as one.
-                if any(re.match(r"^-\w*i", a) for a in args):
+                if any(_INPLACE_RE.match(a) for a in args):
                     found.extend(paths or ["(in-place edit)"])
             elif base in ("cp", "mv"):
-                if len(paths) >= 2:
+                tdir = _opt_value(args, _TARGET_DIR_OPTS)
+                if tdir:
+                    found.extend(os.path.join(tdir, os.path.basename(p))
+                                 for p in paths if p != tdir)
+                elif len(paths) >= 2:
                     found.append(paths[-1])
             elif base == "touch":
-                found.extend(paths[:1])
+                found.extend(paths)          # touch creates EVERY operand
             elif base == "patch":
                 found.extend(_patch_targets(
                     _patch_sources(args, _redirected_input(tokens, i)),
-                    _patch_strip(args), cwd))
+                    _patch_strip(args), cwd,
+                    prefix=_opt_value(args, _DIR_OPTS)))
+                # -o redirects the result to a file the headers never name.
+                out = _opt_value(args, _OUT_OPTS)
+                if out:
+                    found.append(out)
             elif base == "git":
-                sub = next((a for a in args
-                            if not a.startswith("-") and "=" not in a), "")
+                sub, tail = _git_subcommand(args)
                 if sub == "apply":
-                    tail = args[args.index(sub) + 1:]
                     # every_positional: `git apply a.patch b.patch` applies both.
                     found.extend(_patch_targets(
                         _patch_sources(tail, _redirected_input(tokens, i),
                                        every_positional=True),
-                        _patch_strip(tail), cwd))
+                        _patch_strip(tail), cwd,
+                        prefix=_opt_value(tail, _DIR_OPTS)))
         cmdpos = False
         i += 1
     return found
@@ -465,7 +638,7 @@ CONTROL_PLANE_DENIAL = (
 def main():
     payload = json.load(sys.stdin)
 
-    if os.environ.get("OPULENT_OFF"):
+    if dial("OPULENT_OFF"):
         allow()
 
     if payload.get("agent_id"):  # inside a subagent: everything allowed
@@ -488,7 +661,7 @@ def main():
                  "(opulent:coder, opulent:mechanic, opulent:test-runner, "
                  "opulent:scribe, opulent:scout, ...) or another purpose-defined "
                  "agent instead.", "catchall:" + st)
-        if os.environ.get("OPULENT_ECO") and st == ECO_LANE:
+        if dial("OPULENT_ECO") and st == ECO_LANE:
             # One-way: the twin is spawnable whether or not eco is set, because
             # voluntarily spending less is never a routing violation.
             # Logged as its own event, not as "deny": an eco redirect is the

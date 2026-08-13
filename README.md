@@ -9,6 +9,17 @@ into separate throwaway agent sessions. Your main conversation stays clean.
 MIT licensed; house rules in [CONTRIBUTING.md](CONTRIBUTING.md), chiefly the
 honesty policy.
 
+## Requirements
+
+**Python 3** on `PATH`, as `python3` or `python`. Both hooks are Python
+scripts; without an interpreter they fail on every guarded tool call and at
+every session start. Note that the fail-open rule below cannot cover this
+case — it is implemented *inside* the interpreter that would not have
+started. Preinstalled on macOS and most Linux distributions; on Windows,
+install from python.org rather than relying on the Store alias.
+
+Everything else is stock Claude Code — no packages, no daemon, no network.
+
 ## Install
 
 Add the marketplace once, then install:
@@ -36,6 +47,32 @@ Two timing gotchas worth knowing up front:
 - **Updating is two steps.** `claude plugin marketplace update opulent`
   refreshes only the marketplace cache; the installed copy moves when you
   follow it with `claude plugin update opulent@opulent` (then restart).
+
+### Setting the dials
+
+`OPULENT_OFF`, `OPULENT_ECO` and `OPULENT_LOG` are read from the environment
+of the `claude` process itself, which rules out the two places people try
+first. Exporting one inside a running session does nothing — the hook is
+spawned by the harness and never sees that shell. Putting one in
+`~/.claude/settings.json` works, but that file is the control plane, so the
+main loop is denied the edit and has to delegate it (which is the design, and
+worth knowing before it surprises you).
+
+Per launch:
+
+```bash
+OPULENT_ECO=1 claude
+```
+
+Persistently, in the `env` block of `~/.claude/settings.json` — hand this to
+`opulent:mechanic`, or edit it yourself outside a session:
+
+```json
+{ "env": { "OPULENT_ECO": "1" } }
+```
+
+`0`, `false`, `no`, `off` and empty all count as unset, so `OPULENT_OFF=0`
+means what it looks like.
 
 ---
 
@@ -105,7 +142,7 @@ verification go to Sonnet (effort xhigh); locating goes to Haiku, which is
 never asked to interpret what it finds. Effort is pinned per lane, not
 inherited from the session — deterministic like everything else here.
 
-**Eco mode.** `OPULENT_ECO=1` in the environment runs complex implementation
+**Eco mode.** `OPULENT_ECO=1` runs complex implementation
 one effort rung down for that session: the session-start policy names
 `opulent:coder-eco` as the implementation lane, and the routing hook denies
 `opulent:coder` with a redirect to the twin — same Opus model, same charter,
@@ -113,9 +150,10 @@ one effort rung down for that session: the session-start policy names
 log shows the rare judgment lanes barely firing, so eco-ing them would save
 nothing, while coder is the high-volume Opus spend. Unset, nothing changes —
 and the twin stays spawnable either way, since voluntarily spending less is
-never a routing violation. Presence is truth, exactly as with `OPULENT_OFF`:
-any non-empty value turns eco on, so `OPULENT_ECO=0` is still eco mode and
-unsetting the variable is what turns it off. A `tests/ci_checks.py` assertion holds
+never a routing violation. `0`, `false`, `no`, `off` and empty all read as
+off, for both dials — until 0.11.2 any non-empty value counted as set, which
+made `OPULENT_OFF=0` a silent way to disable every denial for a session and
+`OPULENT_ECO=0` a way to turn eco on. A `tests/ci_checks.py` assertion holds
 [agents/coder-eco.md](agents/coder-eco.md) byte-identical to
 [agents/coder.md](agents/coder.md) outside `name`, `description` and `effort`,
 so the duplication cannot drift silently.
@@ -136,8 +174,8 @@ Design details:
 - **Catch-all delegation denied.** Delegating to `general-purpose` or `claude` would satisfy "delegation" while defeating "routing" (full tools, session model) — the hook denies those in the main loop and points at the lanes. Purpose-defined agents from other plugins are untouched.
 - **The control plane, and only it.** Refused from the main loop: anything under a `.claude` directory's `hooks/`, `agents/`, `commands/` or `plugins/`, a `settings*.json` beside them, and any `.env*` — the user's and the project's alike, because both govern the session that is running. A plugin's **source repo** is ordinary code and is freely editable: it changes nothing until it is installed, and treating it as sacred is what made plugin development expensive. Paths are normalized per-platform, so this holds on Windows and macOS, not just Linux.
 - **Scratch is quiet.** The system temp dir and `~/.claude/{plans,projects,todos}` are writable and *not* logged — an audit trail of temp files buries the project edits it exists to surface.
-- **Escape hatch.** `OPULENT_OFF=1` in the environment disables enforcement for that session — a dial, not a binary, so tuning doesn't require uninstalling.
-- **Telemetry.** Main-loop edits (`"event": "edit"`), test runs (`"test"`), delegations (`"delegate"`) and denials (`"deny"`) each append a line to `~/.claude/opulent-log.jsonl` (override with `OPULENT_LOG`), and each session opens with a one-line activity summary. The record is the point: what the main loop touched stays visible whether or not it was refused. The doctor's own canary write is still denied, but logged as `"event": "probe"` so health checks don't skew denial telemetry; the eco redirect is logged as `"event": "eco"` for the same reason.
+- **Escape hatch.** `OPULENT_OFF=1` in the environment disables enforcement for that session, so tuning doesn't require uninstalling. The session-start policy says so too, rather than reciting rules nothing is enforcing.
+- **Telemetry.** Main-loop edits (`"event": "edit"`), test runs (`"test"`), delegations (`"delegate"`) and denials (`"deny"`) each append a line to `~/.claude/opulent-log.jsonl` (override with `OPULENT_LOG`), and each session with logged activity behind it opens with a one-line summary (a fresh install has none yet, so the line is simply absent). The record is the point: what the main loop touched stays visible whether or not it was refused. The doctor's own canary write is still denied, but logged as `"event": "probe"` so health checks don't skew denial telemetry; the eco redirect is logged as `"event": "eco"` for the same reason.
 
 ## What enforcement is — and isn't
 
@@ -248,7 +286,9 @@ couplings are real, and each one breaks quietly if either side moves.
   down on this side too.
 - **The live e2e tier runs from over there.** `tests/validate_plugins.py` and
   `tests/e2e_smoke.py` live in this repo, beside what they test, but nothing in
-  this repo's CI runs them: they need an authenticated `claude` CLI, and no
+  this repo's CI runs them: they need the `claude` CLI — on `PATH` for
+  `validate_plugins.py`, and additionally *authenticated* for `e2e_smoke.py`,
+  which opens real sessions — and no
   self-hosted runner serves a public repository. lens-master's CI clones our
   main and runs both, by manual dispatch only — the honest trigger is a CLI or
   harness update on that machine, not a calendar. Renaming or moving either
@@ -263,9 +303,17 @@ couplings are real, and each one breaks quietly if either side moves.
 python3 tests/hook_selftest.py               # routing hook payload cases
 python3 tests/ci_checks.py                   # marketplace manifests + session-start JSON
 python3 tests/gate_selftest.py               # the gate finds planted terms, and never prints them
+python3 tests/gate_corpus_selftest.py        # ...in every corner of the object database
 python3 tests/public_gate.py                 # no private residue in the object database
 python3 tests/validate_plugins.py            # claude CLI structure validation (needs claude on PATH)
+python3 tests/e2e_smoke.py                   # live sessions (needs an AUTHENTICATED claude CLI)
 ```
+
+Both self-tests take a path override so they can be pointed at an older copy
+and watched to fail — `ROUTE_HOOK_PATH=` for `hook_selftest.py`,
+`PUBLIC_GATE_PATH=` for `gate_corpus_selftest.py`. A guard case that has never
+failed is a guard case nobody has checked, which is how 71 of 120 hook cases
+came to be satisfied by a hook that did nothing at all.
 
 `ci_checks.py` and `validate_plugins.py` both derive their member roster from
 `marketplace.json` — a member sourced from another repo is skipped with a

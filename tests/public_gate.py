@@ -6,8 +6,19 @@ purpose — the README documents the companion contracts, and the doctor probes
 its hook by name — but its internals are not: the matcher constants, the
 escape-hatch variables, the file paths they lived at, and its release prose.
 A working tree can be cleaned in an afternoon; a history keeps every draft of
-it forever. So this reads the object database — `git log --all -p` over every
-ref, plus the tag and branch names — rather than the checkout.
+it forever. So this reads the object database — literally every object git
+holds, via `cat-file --batch-all-objects`, plus every ref name — rather than
+the checkout.
+
+It read `git log --all -p` until 2026-08-13, and that was not the object
+database: `log -p` renders reachable-history *diffs*, a strict subset that
+omits merge-commit conflict resolutions (`-p` prints no patch for a merge),
+unreachable and reflog-held objects, binary blobs, annotated tag messages,
+committer identity, and refs outside heads/remotes. The miss was not
+theoretical — this gate certified a checkout clean while all ten stored terms
+sat in its object database, in objects `log` cannot reach. Enumerating objects
+instead closes that whole family at once, because there is nothing under an
+object database that `--batch-all-objects` does not enumerate.
 
 Three properties worth stating out loud:
 
@@ -40,9 +51,11 @@ to pretend otherwise.
 import argparse
 import fnmatch
 import os
+import re
 import subprocess
 import sys
 import traceback
+import unicodedata
 from collections import namedtuple
 
 # text   — matched case-insensitively as a plain substring, so it is stored
@@ -101,6 +114,11 @@ DENY_TAGS = [("lens-master--v*", "a companion release tag from the shared repo")
 # cannot see, and that is a thing a reviewer of this file can see instead.
 SELF = "tests/public_gate.py"
 
+# Recognises a copy of this file by content, not just by path — every past
+# revision of it carries this sentence, and a revision at an older path would
+# otherwise become a permanent finding the moment the file moved.
+SELF_MARKER = "gate: scans the whole object database"
+
 MAX_EXAMPLES = 3   # per term; the count is the finding, the lines are the lead
 MAX_WIDTH = 140    # a minified or generated line must not own the report
 
@@ -153,8 +171,15 @@ def private_terms(raw):
     so `#2` is the second term the gate looked for and agrees with the count
     printed beside them. Blank tokens are dropped rather than numbered: a
     secret stored with a stray separator or a trailing newline should not
-    renumber the terms a maintainer is trying to map a finding back to."""
-    kept = [part.strip().lower() for part in (raw or "").split(":")]
+    renumber the terms a maintainer is trying to map a finding back to.
+
+    Newlines separate as well as colons. A multi-line secret is the default
+    shape for this value in a CI secret store, and splitting on `:` alone kept
+    the newline *inside* the term — where it could never match, since the
+    corpus is matched line by line. That produced the one outcome this file
+    exists to prevent: a term reported as supplied and matched, a run reported
+    as clean, and nothing actually scanned for."""
+    kept = [part.strip().lower() for part in re.split(r"[:\r\n]+", raw or "")]
     return [Term(text, PRIVATE_LEAK, f"private term #{i} (environment)", True)
             for i, text in enumerate([t for t in kept if t], 1)]
 
@@ -181,29 +206,44 @@ PRIVATE_MASK = "[private]"
 PRIVATE = private_terms(os.environ.get(PRIVATE_ENV))
 
 
+def variants(text):
+    """A term as it can legitimately appear: both Unicode normal forms.
+
+    An identity term is usually a name, and a name with an accent has two
+    equally valid encodings — `é` as one code point or as `e` plus a combining
+    mark. They are the same name to a reader and different strings to `in`.
+    A gate that matched only the form the operator happened to type would
+    clear a history that carries the other one."""
+    return {v for v in (unicodedata.normalize("NFC", text),
+                        unicodedata.normalize("NFD", text)) if v}
+
+
 def censor(s):
     """`s` with every occurrence of every private term masked.
 
     Case-insensitive and exhaustive, because a path routinely carries the same
     term more than once and in more than one casing, and a censor that stops at
     the first hit or that only matches the casing the operator happened to type
-    has not censored the path. Masked greedily from the left, so overlapping
-    occurrences lose their overlap to the one that started first and no run of
-    the term's own text is left behind either way.
+    has not censored the path. Masked left to right and non-overlapping, so
+    overlapping occurrences lose their overlap to the one that started first.
+
+    Offsets are taken against `s` itself, via a case-insensitive regex, and
+    that is load-bearing rather than stylistic. This searched a `s.lower()`
+    copy and sliced the original until 2026-08-13 — but `str.lower()` is not
+    length-preserving (U+0130 lowers to two characters), so every such
+    character ahead of a match slid the mask further right, and past the first
+    one the mask stopped covering the term at all: the term printed in full,
+    on the line directly above the promise that it never does. A match found
+    in the string being edited cannot drift from it.
 
     A term that is a substring of the mask is masked to nothing instead — the
     single case where a fixed mask would reprint what it stands in for."""
     for term in PRIVATE:
         mask = "" if term.text in PRIVATE_MASK.lower() else PRIVATE_MASK
-        low, out, i = s.lower(), [], 0
-        j = low.find(term.text)
-        while j != -1:
-            out.append(s[i:j])
-            out.append(mask)
-            i = j + len(term.text)
-            j = low.find(term.text, i)
-        out.append(s[i:])
-        s = "".join(out)
+        for form in variants(term.text):
+            # A function replacement, so a mask containing a backslash or a
+            # group reference is inserted literally rather than interpreted.
+            s = re.sub(re.escape(form), lambda _m: mask, s, flags=re.IGNORECASE)
     return s
 
 
@@ -251,57 +291,147 @@ def git(repo, *args, ok=(0,)):
     return p
 
 
-def history(repo):
-    """Every commit reachable from any ref, message and patch alike.
+def git_bytes(repo, *args):
+    """Like git(), but undecoded — object contents are not all text, and a
+    blob decoded with `errors="replace"` has had its non-UTF-8 bytes turned
+    into U+FFFD before any term could be matched against them."""
+    p = subprocess.run(["git", "-C", repo, *args], capture_output=True,
+                       timeout=600)
+    if p.returncode != 0:
+        sys.stderr.write(censor(p.stderr.decode("utf-8", "replace")))
+        raise SystemExit(censor(
+            f"public gate: `git {' '.join(args[:3])}` exited {p.returncode} in "
+            f"{repo} — the object database could not be read, so nothing here "
+            f"has been cleared"))
+    return p.stdout
 
-    `--full-history` because path-limited log otherwise simplifies commits
-    away, and a commit git considers uninteresting can still carry a secret.
-    A repo with no commits yet scans as empty rather than failing: there is
-    nothing in it to leak."""
+
+def objects(repo):
+    """Every object git holds, contents included: (sha, type, body-bytes).
+
+    `--batch-all-objects` is the whole point of this file. It enumerates the
+    object database itself — including objects no ref can reach, which is
+    where residue lands after the `reset --hard` or history rewrite that a
+    failure of this gate tells someone to perform."""
+    raw = git_bytes(repo, "cat-file", "--batch-all-objects", "--batch",
+                    "--buffer")
+    i, n = 0, len(raw)
+    while i < n:
+        nl = raw.find(b"\n", i)
+        if nl == -1:
+            break
+        header = raw[i:nl].decode("utf-8", "replace").split()
+        if len(header) < 3 or not header[2].isdigit():
+            i = nl + 1          # a missing/!-marked object: nothing to read
+            continue
+        sha, otype, size = header[0], header[1], int(header[2])
+        yield sha, otype, raw[nl + 1:nl + 1 + size]
+        i = nl + 1 + size + 1
+
+
+def blob_places(repo):
+    """blob sha -> sorted (commit, path) pairs it is stored at.
+
+    A finding needs somewhere to point, and the commit is the half that can be
+    acted on: "the residue lives in the object database" is advice to rewrite
+    a history, and a history is rewritten by commit. The path says which file
+    to look in once you are there.
+
+    An unreachable blob has neither by definition — nothing indexes it — so it
+    is reported by its own sha, which is still exactly what `git cat-file -p`
+    needs to show a maintainer what leaked."""
+    places = {}
     if git(repo, "rev-list", "--all", "--count").stdout.strip() in ("", "0"):
-        return ""
-    return git(repo, "log", "--all", "--full-history", "-p", "--no-color",
-               "--", ":/", f":(top,exclude){SELF}").stdout
+        return places
+    for commit in git(repo, "rev-list", "--all").stdout.split():
+        for line in git(repo, "ls-tree", "-r", "--full-tree",
+                        commit).stdout.splitlines():
+            meta, _, path = line.partition("\t")
+            bits = meta.split()
+            if len(bits) >= 3 and path:
+                places.setdefault(bits[2], set()).add((commit[:9], path))
+    return {sha: sorted(v) for sha, v in places.items()}
 
 
-def scan(text, terms):
+def corpus(repo):
+    """The whole object database plus every ref name, as (location, text).
+
+    Located per object rather than by streaming attribution. The old patch
+    stream had to guess — it filed a hit under whichever `+++` header had gone
+    past most recently — and a guess is not good enough for a secret term,
+    where the location is the entire finding. An object knows its own name.
+
+    Trees are scanned because a *filename* is residue as surely as a file's
+    contents, and a filename that only ever existed inside a merge result
+    appears in no diff anywhere."""
+    places = blob_places(repo)
+    for sha, otype, body in objects(repo):
+        text = body.decode("utf-8", "replace")
+        if otype == "blob":
+            where = places.get(sha, [])
+            # This file names every term it hunts, so scanning any copy of it
+            # would make the gate its own only finding, forever. Matched on
+            # content as well as path: an older revision of it is still a copy
+            # of it, and after a rename the path alone would stop recognising
+            # one.
+            if (where and all(p == SELF for _, p in where)) or SELF_MARKER in text:
+                continue
+            if where:
+                commit, path = where[0]
+                extra = f" (+{len(where) - 1} more)" if len(where) > 1 else ""
+                yield f"{commit} {path}{extra}", text
+            else:
+                # Unreachable: no commit and no path exist to name. This is
+                # the case `git log -p` could not see at all, and the one a
+                # history rewrite leaves behind.
+                yield f"{sha[:9]} (unreachable blob)", text
+        elif otype == "commit":
+            # The raw object, so `committer` is scanned and not just `author`:
+            # `git log` prints one of the two by default, GitHub shows both.
+            yield f"{sha[:9]} commit object", text
+        elif otype == "tag":
+            yield f"{sha[:9]} tag object", text
+        elif otype == "tree":
+            # Binary: 'mode name\0<20 raw bytes>'. The names are the only part
+            # worth scanning, and the shas between them are hex noise that
+            # would never match a term anyway.
+            names = re.findall(rb"[^\x00]*? ([^\x00]+)\x00", body)
+            yield (f"{sha[:9]} tree",
+                   "\n".join(n.decode("utf-8", "replace") for n in names))
+    for ref in git(repo, "for-each-ref", "--format=%(refname)").stdout.split():
+        # A ref name inherits nothing and the ref *is* the place — which for a
+        # secret term means the location carries the payload. It is printed
+        # anyway, through the censor, because `ref refs/heads/wip/[private]`
+        # still says which ref to delete.
+        yield f"ref {ref}", ref
+
+
+def scan(chunks, terms):
     """Hits per term, each carrying where it was found — because "the term is
-    in your history somewhere" is a finding nobody can act on. Three kinds of
-    location, one per kind of line the corpus is made of: a commit for a hit in
-    a message, that commit and a path for a hit inside a patch, and the ref
-    itself for a hit in a name. The patch-stream half is best-effort, since it
-    attributes by the last header that streamed past; a ref name arrives
-    already labelled and is exact.
+    in your history somewhere" is a finding nobody can act on.
+
+    Takes (location, text) pairs, so a hit is attributed to the object it was
+    actually found in rather than to whichever header last streamed past.
+
+    Matching is case-insensitive and normalization-insensitive: each line is
+    compared in both Unicode normal forms, because a term and a history can
+    spell the same accented name two equally valid ways.
 
     A secret term's matched line is not kept at all. The renderer would refuse
     to print it, but a report cannot print what the scan never held, and that
     is the version of this promise that survives an edit to the renderer."""
     hits = {t: [] for t in terms}
-    commit, where = "?", "(no commit)"
-    for line in text.splitlines():
-        if line.startswith("commit "):
-            commit = line.split()[1][:9]
-            where = f"{commit} commit message"
-        elif line.startswith("diff --git "):
-            # The header names the path even for a delete, where +++ is
-            # /dev/null and the removed content is the whole point.
-            where = f"{commit} {line.split(' b/')[-1]}"
-        elif line.startswith("+++ b/"):
-            where = f"{commit} {line[6:]}"
-        elif line.startswith("refname "):
-            # A ref name inherits nothing: it is not in the patch stream, and
-            # the ref *is* the place. Without this the hit would be filed under
-            # whichever commit and file happened to stream past last — a
-            # location that does not contain the term, which for a secret term
-            # is the whole of the evidence and therefore fatal. Nothing git
-            # prints can be mistaken for one of these: every line of a patch
-            # body carries a prefix, and a message body is indented.
-            where = f"ref {line[8:]}"
-        low = line.lower()
-        for term in terms:
-            if term.text in low:
-                hits[term].append(
-                    (where, None if term.secret else line.strip()[:MAX_WIDTH]))
+    wanted = [(t, variants(t.text)) for t in terms]
+    for where, text in chunks:
+        for line in text.splitlines():
+            low = line.lower()
+            forms = {low, unicodedata.normalize("NFC", low),
+                     unicodedata.normalize("NFD", low)}
+            for term, term_forms in wanted:
+                if any(f in form for f in term_forms for form in forms):
+                    hits[term].append(
+                        (where,
+                         None if term.secret else line.strip()[:MAX_WIDTH]))
     return hits
 
 
@@ -320,11 +450,11 @@ def main(repo):
 
     terms = DENY + PRIVATE
 
-    text = history(repo)
     tags = git(repo, "tag", "-l").stdout.split()
-    branches = git(repo, "branch", "-a", "--format=%(refname)").stdout.split()
-    say(f"scanned: {text.count(chr(10)) + bool(text)} lines of history, "
-        f"{len(tags)} tags, {len(branches)} branches in {repo}")
+    refs = git(repo, "for-each-ref", "--format=%(refname)").stdout.split()
+    chunks = list(corpus(repo))
+    say(f"scanned: {len(chunks)} objects and refs, {len(tags)} tags, "
+        f"{len(refs)} refs in {repo}")
     if PRIVATE:
         say(f"private terms: {len(PRIVATE)} supplied via {PRIVATE_ENV}, "
             f"matched but never echoed")
@@ -333,13 +463,10 @@ def main(repo):
             f"Not a failure; a run without secrets has none to scan for.")
 
     # Ref names are history too — a branch or tag can carry in its name what
-    # the tree it points at never says. They join the same corpus as synthetic
-    # `refname ` lines, which scan() attributes to the ref rather than to the
-    # patch above them. The separating newline is not decoration: a ref glued
-    # to the tail of the last patch line is not a ref line any more, and its
-    # hit goes back to being filed under the last file git happened to print.
-    refs = "\n".join(f"refname {r}" for r in tags + branches)
-    hits = scan(f"{text}\n{refs}", terms)
+    # the tree it points at never says. corpus() yields them as their own
+    # located chunks, so a ref hit is filed against the ref rather than
+    # against whatever object happened to be enumerated before it.
+    hits = scan(chunks, terms)
     bad_tags = [(pattern, why, [t for t in tags
                                 if fnmatch.fnmatch(t.lower(), pattern)])
                 for pattern, why in DENY_TAGS]

@@ -1,6 +1,6 @@
 ---
 name: ui-checker
-description: Visual/UI verification — drives the browser, takes screenshots, checks rendered pages, console errors, and failed network requests. MUST BE USED to visually confirm UI changes render and behave correctly; the main loop should not do this itself.
+description: Visual/UI verification — drives the browser, takes screenshots, checks rendered pages, console errors, and failed network requests. MUST BE USED to visually confirm UI changes render and behave correctly; the main loop delegates visual verification rather than doing it itself.
 model: sonnet
 effort: xhigh
 tools: Bash, Read, Grep, Glob, mcp__Claude_Browser
