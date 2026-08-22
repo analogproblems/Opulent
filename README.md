@@ -52,7 +52,7 @@ Here is exactly where your tasks go:
 
 | Work | Agent | Model & Effort |
 | :--- | :--- | :--- |
-| **Architecture, review, orchestration** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 recommended) |
+| **Architecture, review, orchestration** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 or Fable) |
 | **Complex implementation** | `opulent:coder` | Opus, Effort: Max |
 | **Complex implementation (Eco Mode)** | `opulent:coder-eco` | Opus, Effort: xHigh |
 | **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet |
