@@ -19,9 +19,10 @@ nothing until it is installed — and treating it as sacred is what made
 plugin development expensive.
 
 Escape hatch: set OPULENT_OFF=1 in the environment to disable enforcement.
-Eco mode: set OPULENT_ECO=1 and complex implementation runs one effort rung
-down — this hook then denies `opulent:coder` with a redirect to the
-`opulent:coder-eco` twin (same model and charter, effort xhigh). Both dials are
+Eco mode: set OPULENT_ECO=1 and the coder ladder is capped at its high rung —
+this hook then denies `opulent:coder` and `opulent:coder-max` with a redirect
+to `opulent:coder-high` (the ladder's ordinary high rung: same model and
+charter, effort high), while the cheaper rungs stay spawnable. Both dials are
 read from the environment, so both are session-granular.
 Telemetry: main-loop edits, test runs, removals, delegations and denials each
 append one JSON line to ~/.claude/opulent-log.jsonl (override path with
@@ -124,14 +125,19 @@ _COMMENT_RE = re.compile(r"(?m)(?:^|\s)#[^\n]*")
 # to them satisfies "delegation" while defeating "routing".
 CATCHALL_AGENTS = {"general-purpose", "claude"}
 
-# Eco mode's one swap. Coder only: the routing log shows the judgment lanes
-# barely fire, so a twin for them would save nothing, while coder is the
-# high-volume Opus spend. Matched on the plugin-qualified name because that is
+# Eco mode's cap on the coder ladder. The ladder only: the routing log shows
+# the judgment lanes barely fire, so capping them would save nothing, while
+# coder is the high-volume Opus spend. The default rung and the one above it
+# are capped; the rungs below are left alone, because spending less was never
+# the violation. ECO_TWIN is not a lane of its own — it is the ladder's
+# ordinary high rung, which anyone can spawn in any session; eco mode simply
+# caps the ladder there. Matched on the plugin-qualified name because that is
 # what the harness actually sends — every delegate line in the log names
-# "opulent:coder", none a bare "coder". Exact equality, so the twin's own name
-# never matches the lane it replaces.
-ECO_LANE = "opulent:coder"
-ECO_TWIN = "opulent:coder-eco"
+# "opulent:coder", none a bare "coder". Membership among exact names rather
+# than a prefix test, so neither the cap's own rung nor `opulent:coder-lite`
+# matches a lane it is not.
+ECO_LANES = ("opulent:coder", "opulent:coder-max")
+ECO_TWIN = "opulent:coder-high"
 
 _OPERATORS = {";", "|", "||", "&&", "&", "(", ")", ";;", ";&", ";;&"}
 _REDIRECTS = {">", ">>", ">|", "&>", "&>>", ">&"}
@@ -1004,6 +1010,16 @@ def main():
 
     if tool in ("Task", "Agent"):
         st = tin.get("subagent_type") or ""
+        # A subagent_type is not guaranteed to be a string: a list or dict
+        # payload used to reach CATCHALL_AGENTS below unchanged, and `in` on
+        # a set hashes its argument first — an unhashable list or dict raised
+        # TypeError there, which propagated out to the module's fail-open and
+        # allowed the spawn with NO log line, the one Task shape that left no
+        # record. Coercing here keeps the catch-all guard, the eco cap and
+        # the delegate line all evaluating on the stringified name — the same
+        # treatment a bare int already got for free from _log's own str().
+        if not isinstance(st, str):
+            st = str(st)
         if st == "Explore":
             # Plugin agents can't shadow built-ins, so redirect instead
             deny("Routing policy: for exploration use the 'opulent:scout' agent "
@@ -1015,17 +1031,29 @@ def main():
                  "(opulent:coder, opulent:mechanic, opulent:test-runner, "
                  "opulent:scribe, opulent:scout, ...) or another purpose-defined "
                  "agent instead.", "catchall:" + st)
-        if dial("OPULENT_ECO") and st == ECO_LANE:
-            # One-way: the twin is spawnable whether or not eco is set, because
-            # voluntarily spending less is never a routing violation.
+        if dial("OPULENT_ECO") and st in ECO_LANES:
+            # One-way: the cap's own rung, and every rung below it, are
+            # spawnable whether or not eco is set, because voluntarily
+            # spending less is never a routing violation.
             # Logged as its own event, not as "deny": an eco redirect is the
             # dial working as asked, and counting it as a denial would inflate
             # the number the doctor reports — the same reason `probe` exists.
+            # The detail names the rung that was capped, not a constant: a
+            # record that said "eco:coder" for both could not tell an architect
+            # reaching for max from one taking the default. The bare slice is
+            # safe only because membership in ECO_LANES was checked above and
+            # every entry is an "opulent:"-prefixed literal — a dynamically
+            # populated ECO_LANES would need removeprefix semantics back.
+            # "capped at the eco rung", not "one rung down": the cap is a place,
+            # and it is the same place for both denied lanes — coder falls one
+            # rung to reach it and coder-max falls two, so a message describing
+            # the caller's drop was false for half the lanes it was shown to.
             deny("Routing policy: eco mode is on for this session (OPULENT_ECO), "
-                 "so complex implementation runs one effort rung down — spawn "
-                 "the '%s' agent instead of '%s'. Same model and same charter; "
-                 "effort xhigh rather than max." % (ECO_TWIN, ECO_LANE),
-                 "eco:coder", event="eco")
+                 "so implementation is capped at the eco rung — spawn the '%s' "
+                 "agent instead of '%s'. Same model and same charter; effort "
+                 "high, one rung below the ladder's default."
+                 % (ECO_TWIN, st),
+                 "eco:" + st[len("opulent:"):], event="eco")
         _log("delegate", st)
         allow()
 

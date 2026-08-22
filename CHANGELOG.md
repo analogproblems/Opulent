@@ -10,6 +10,46 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.12.0 — 2026-08-22
+
+**The coder lane becomes a ladder.** One effort rung per lane was a
+single dial pretending to be a spectrum. The coder lane now carries
+four rungs — `coder-lite` (medium), `coder-high` (high), `coder`
+(xhigh, the new default), `coder-max` (max) — so the architect picks
+effort by picking the agent. The deterministic task-type routing is
+unchanged; the fuzzy part is bounded to default-with-exceptions, and a
+misroute self-corrects by resubmitting one rung up.
+
+Every rung is retuned to Anthropic's current effort guidance: `coder`
+drops from max to xhigh (the documented best setting for coding and
+agentic work — max risks overthinking), the high rung sits at the
+documented sweet spot balancing quality against token efficiency, and
+the four support lanes (mechanic, test-runner, ui-checker, scribe) step
+from xhigh down to that same rung — the right setting for bounded
+verification and non-agentic work. Scout stays effortless; Haiku 4.5
+still rejects the parameter.
+
+The eco twin is folded into the ladder as an ordinary rung: `coder-eco`
+is renamed `coder-high`, which anyone can spawn in any session, and
+OPULENT_ECO is redefined as capping the ladder there. So eco now caps
+the ladder rather than swapping one lane: `opulent:coder` and
+`opulent:coder-max` are both denied with a redirect to `coder-high`,
+while the cheaper rungs stay spawnable — voluntarily spending less is
+never a routing violation. The redirect's message is reworded to match:
+it now says implementation is "capped at the eco rung" rather than
+"runs one effort rung down", which was false for a coder-max caller
+falling two. CI's sync check covers the whole ladder rather than a
+single twin: all coder variants carry the charter verbatim and may
+differ only in name, description, and effort, each pinned to its rung.
+Breaking: the `opulent:coder-eco` name is gone — spawn
+`opulent:coder-high`.
+
+One pre-existing hole closed by the same review: a spawn payload whose
+subagent_type was a list or dict used to raise out of the hook's
+set-membership test into the fail-open, allowing the spawn with no log
+line — the one Task shape that left no record. It is now coerced to a
+string and recorded like any other delegation.
+
 ## opulent 0.11.3 — 2026-08-13
 
 **What the second review found.** Six fresh-context lenses over the

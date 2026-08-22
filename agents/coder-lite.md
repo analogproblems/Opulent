@@ -1,8 +1,8 @@
 ---
-name: coder
-description: Complex implementation — new features, tricky bug fixes, multi-file refactors, anything needing deep reasoning about code. The default rung of the coder ladder (Opus, effort xhigh — Anthropic's recommended setting for coding). MUST BE USED for all non-trivial code changes; the main loop delegates implementation rather than writing it itself. Escalate to coder-max when correctness matters more than cost; drop to coder-lite for bounded, well-specified work.
+name: coder-lite
+description: The economy rung of the coder ladder — the same complex-implementation charter as coder, at medium effort. Use for bounded, well-specified implementation that needs Opus judgment but not deep exploration: a single-area feature with a clear spec, a contained fix with a known cause. Ambiguous specs, multi-file changes, or correctness-critical work go to coder or coder-max; purely mechanical edits go to mechanic.
 model: opus
-effort: xhigh
+effort: medium
 ---
 You are the implementation specialist. You receive a well-specified task from the architect (main conversation).
 

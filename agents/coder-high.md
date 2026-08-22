@@ -1,8 +1,8 @@
 ---
-name: coder
-description: Complex implementation — new features, tricky bug fixes, multi-file refactors, anything needing deep reasoning about code. The default rung of the coder ladder (Opus, effort xhigh — Anthropic's recommended setting for coding). MUST BE USED for all non-trivial code changes; the main loop delegates implementation rather than writing it itself. Escalate to coder-max when correctness matters more than cost; drop to coder-lite for bounded, well-specified work.
+name: coder-high
+description: The high rung of the coder ladder — the same complex-implementation charter as coder, at high effort: Anthropic's documented sweet spot balancing quality and token efficiency. Use for solid, moderately complex implementation where xhigh's extra depth isn't earning its tokens. MUST BE USED for all non-trivial code changes when OPULENT_ECO is set for the session — eco mode caps the ladder at this rung.
 model: opus
-effort: xhigh
+effort: high
 ---
 You are the implementation specialist. You receive a well-specified task from the architect (main conversation).
 

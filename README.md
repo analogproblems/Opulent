@@ -53,15 +53,19 @@ Here is exactly where your tasks go:
 | Work | Agent | Model & Effort |
 | :--- | :--- | :--- |
 | **Architecture, review, orchestration** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 or Fable) |
-| **Complex implementation** | `opulent:coder` | Opus, Effort: Max |
-| **Complex implementation (Eco Mode)** | `opulent:coder-eco` | Opus, Effort: xHigh |
+| **Complex implementation (default rung)** | `opulent:coder` | Opus, Effort: xHigh |
+| **Correctness-critical implementation** | `opulent:coder-max` | Opus, Effort: Max |
+| **Standard implementation** | `opulent:coder-high` | Opus, Effort: High |
+| **Bounded, well-specified implementation** | `opulent:coder-lite` | Opus, Effort: Medium |
 | **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet |
 | **Tests, builds, linters** | `opulent:test-runner` | Sonnet (no edit tools) |
 | **UI verification, console errors** | `opulent:ui-checker` | Sonnet + browser tools |
-| **Documentation (READMEs, ADRs)** | `opulent:scribe` | Opus, Effort: xHigh |
+| **Documentation (READMEs, ADRs)** | `opulent:scribe` | Opus, Effort: High |
 | **Locating code and structure** | `opulent:scout` | Haiku |
 
-*A lane whose definition lists no tools (coder, coder-eco, mechanic) inherits all tools.*
+*A lane whose definition lists no tools (the coder ladder — coder, coder-max, coder-high, coder-lite — and mechanic) inherits all tools.*
+
+**The coder lane is a ladder.** Its four rungs share one charter and differ only in effort: `opulent:coder` at `xhigh` is the default — Anthropic's recommended setting for coding — with `opulent:coder-max` for work where correctness matters more than cost, `opulent:coder-high` at Anthropic's documented sweet spot for quality against token efficiency (where `xhigh`'s extra depth isn't earning its tokens), and `opulent:coder-lite` for bounded, well-specified changes. Misroutes are cheap to fix: if a rung's output fails review or tests, resubmit one rung up.
 
 *Note: You can manually escalate problems Opus can't crack to Fable in its own separate session. You can also run Fable in the Architect seat if you have access!*
 
@@ -71,7 +75,7 @@ Here is exactly where your tasks go:
 
 Opulent is configured via environment variables. *Note: The hooks read these from the environment Claude Code was launched with — exporting them inside a running session does nothing, and a change takes effect at the next session start.*
 
-* **Eco Mode (`OPULENT_ECO=1`):** Runs complex implementation one effort rung down. It routes `opulent:coder` tasks to `opulent:coder-eco` (Opus at `xhigh` effort instead of `max`). 
+* **Eco Mode (`OPULENT_ECO=1`):** Caps the coder ladder at its `opulent:coder-high` rung. It routes both `opulent:coder` and `opulent:coder-max` tasks there (Opus at `high` effort instead of `xhigh` or `max`). The cheaper rungs stay available — voluntarily spending less is never a routing violation. 
 * **Kill Switch (`OPULENT_OFF=1`):** Disables enforcement entirely for that session.
 * **Custom Logs (`OPULENT_LOG=<path>`):** Redirects the telemetry log from its default location, `~/.claude/opulent-log.jsonl`.
 

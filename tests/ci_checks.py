@@ -91,12 +91,14 @@ for m in members():
             f"highest version present — entries must be newest-first")
     print(f"released in {CHANGELOG}: {m.name} {manifest['version']}")
 
-# The eco twin is a deliberate copy: same model, same charter, one effort rung
-# down. Duplication that nothing holds in place drifts silently — the twin
-# keeps the charter it was copied from only for as long as someone remembers
-# to edit both files. This is that someone.
-ORIGINAL, TWIN = "agents/coder.md", "agents/coder-eco.md"
-TWIN_FIELDS = {"name", "description", "effort"}
+# The coder lane is a ladder: one charter, one model, and copies of the file
+# that differ only in the effort rung they sit on. Duplication that nothing
+# holds in place drifts silently — a rung keeps the charter it was copied from
+# only for as long as someone remembers to edit every file. This is that
+# someone, for the whole ladder.
+ORIGINAL, HIGH_RUNG = "agents/coder.md", "agents/coder-high.md"
+LADDER = {"coder-high": "high", "coder-max": "max", "coder-lite": "medium"}
+RUNG_FIELDS = {"name", "description", "effort"}
 
 
 def agent_parts(path):
@@ -153,41 +155,65 @@ routing = hook_namespace("hooks/route-models.py")
 policy_ns = hook_namespace("hooks/session-start.py")
 
 front, body = agent_parts(ORIGINAL)
-twin_front, twin_body = agent_parts(TWIN)
-if twin_body != body:
+# The rung every other rung is measured from, pinned rather than merely
+# inherited: Anthropic's guidance puts coding and agentic work at xhigh, and a
+# default that drifted back to max would move the whole ladder with it.
+if front.get("effort") != "xhigh":
     raise SystemExit(
-        f"{TWIN}: body differs from {ORIGINAL} — the eco twin carries the same "
-        f"charter verbatim and may differ only in frontmatter")
-drift = sorted(k for k in set(front) | set(twin_front)
-               if front.get(k) != twin_front.get(k))
-if set(drift) - TWIN_FIELDS:
+        f"{ORIGINAL}: effort is {front.get('effort')!r}, expected 'xhigh' — "
+        f"the ladder's default rung is xhigh, Anthropic's recommended coding "
+        f"setting")
+# The rungs are checked against THIS body, which makes the sync mutual and
+# anchored to nothing: four empty files agree with each other perfectly. So the
+# file every rung is measured from is pinned to the charter it carries, and
+# "all four gutted" can no longer satisfy the sync.
+CHARTER = b"implementation specialist"
+if CHARTER not in body:
     raise SystemExit(
-        f"{TWIN}: frontmatter differs from {ORIGINAL} in {', '.join(drift)} — "
-        f"only {', '.join(sorted(TWIN_FIELDS))} may differ")
-if twin_front.get("name") != "coder-eco":
-    raise SystemExit(
-        f"{TWIN}: name is {twin_front.get('name')!r}, expected 'coder-eco' — "
-        f"the routing hook redirects to that name by hand")
-# Permitted to differ is not the same as required to differ. A twin at
-# effort: max is byte-identical to coder in every way that matters and saves
-# nothing — the whole point of the file is the rung it sits on.
-if twin_front.get("effort") != "xhigh":
-    raise SystemExit(
-        f"{TWIN}: effort is {twin_front.get('effort')!r}, expected 'xhigh' — "
-        f"the eco twin is the coder charter one rung down")
-if "effort" not in drift:
-    raise SystemExit(
-        f"{TWIN}: effort is identical to {ORIGINAL} ({front.get('effort')!r}) — "
-        f"a twin that spends the same is not an eco lane")
-# The hook redirects to a name it spells out by hand; if the file it points at
-# were renamed, eco mode would deny the coder lane and offer a lane that does
-# not exist. Read from the hook's own constant, not retyped here.
+        f"{ORIGINAL}: the body never says {CHARTER.decode()!r} — every rung is "
+        f"synced to this file, so a charter emptied here would pass the sync "
+        f"and leave the whole ladder briefing nobody")
+ladder_front = {}
+for variant, rung in sorted(LADDER.items()):
+    path = f"agents/{variant}.md"
+    v_front, v_body = agent_parts(path)
+    ladder_front[variant] = v_front
+    if v_body != body:
+        raise SystemExit(
+            f"{path}: body differs from {ORIGINAL} — every rung of the coder "
+            f"ladder carries the same charter verbatim and may differ only in "
+            f"frontmatter")
+    drift = sorted(k for k in set(front) | set(v_front)
+                   if front.get(k) != v_front.get(k))
+    if set(drift) - RUNG_FIELDS:
+        raise SystemExit(
+            f"{path}: frontmatter differs from {ORIGINAL} in {', '.join(drift)} — "
+            f"only {', '.join(sorted(RUNG_FIELDS))} may differ")
+    if v_front.get("name") != variant:
+        raise SystemExit(
+            f"{path}: name is {v_front.get('name')!r}, expected {variant!r} — "
+            f"the routing hook and the policy spell that name out by hand")
+    # Permitted to differ is not the same as required to differ. A rung at
+    # coder's own effort is byte-identical to it in every way that matters and
+    # saves (or buys) nothing — the whole point of the file is where it sits.
+    if v_front.get("effort") != rung:
+        raise SystemExit(
+            f"{path}: effort is {v_front.get('effort')!r}, expected {rung!r} — "
+            f"that is the rung this lane exists to occupy")
+    # No separate "effort must DIFFER from coder.md" check: the xhigh pin above
+    # and the per-rung pin here name different values, so divergence is already
+    # guaranteed and a check for it could never fire.
+    print(f"ladder rung in sync with {ORIGINAL}: {path} ({', '.join(drift)} differ)")
+# Eco caps the ladder at its high rung, and the hook spells that rung's name
+# out by hand; if the file it points at were renamed, eco mode would deny the
+# coder lane and offer a lane that does not exist. Read from the hook's own
+# constant, not retyped here.
 eco_twin = constant(routing, "ECO_TWIN", "hooks/route-models.py")
-if eco_twin != "opulent:" + twin_front["name"]:
+if eco_twin != "opulent:" + ladder_front["coder-high"]["name"]:
     raise SystemExit(
-        f"hooks/route-models.py: ECO_TWIN is {eco_twin!r}, but {TWIN} declares "
-        f"name {twin_front['name']!r} — the redirect names a lane that is not there")
-print(f"eco twin in sync with {ORIGINAL}: {TWIN} ({', '.join(drift)} differ)")
+        f"hooks/route-models.py: ECO_TWIN is {eco_twin!r}, but {HIGH_RUNG} declares "
+        f"name {ladder_front['coder-high']['name']!r} — the redirect names a lane "
+        f"that is not there")
 print(f"routing hook redirects to a lane that exists: {eco_twin}")
 
 hook = os.path.join(REPO, "hooks", "session-start.py")
@@ -195,14 +221,51 @@ hook = os.path.join(REPO, "hooks", "session-start.py")
 # The eco swap is a str.replace of one exact line, so a reworded CONTEXT turns
 # it into a silent no-op. Checked at the source, against the hook's own
 # constants: downstream the no-op is nearly invisible, because the eco note
-# names the twin too.
+# names the high rung too.
 CONTEXT = constant(policy_ns, "CONTEXT", "hooks/session-start.py")
 CODER_LINE = constant(policy_ns, "CODER_LINE", "hooks/session-start.py")
 if CODER_LINE not in CONTEXT:
     raise SystemExit(
         "hooks/session-start.py: CODER_LINE is not a line of CONTEXT, so the "
         "eco substitution replaces nothing and silently does nothing")
-print("session-start's eco substitution has something to substitute")
+# The paragraph that teaches the ladder is swapped the same way — but CONTEXT
+# SPLICES this constant (`""" + LADDER_PARA + """`) rather than repeating its
+# text, so today this check cannot fail, and it is weaker than CODER_LINE's
+# above for exactly that reason: that line is hand-duplicated and this one is
+# not. It stays as a tripwire on the day someone inlines the paragraph for
+# readability — from then on the copy is free to drift, and a drifted copy
+# leaves eco mode advertising the rungs it is denying.
+LADDER_PARA = constant(policy_ns, "LADDER_PARA", "hooks/session-start.py")
+if LADDER_PARA not in CONTEXT:
+    raise SystemExit(
+        "hooks/session-start.py: LADDER_PARA is not part of CONTEXT, so the "
+        "eco substitution replaces nothing and silently does nothing")
+# Names AND efforts, paired: a paragraph that advertised coder-max as (medium)
+# and coder-lite as (max) names every rung and teaches the session to escalate
+# downwards. Both halves come from LADDER rather than being retyped here, so
+# the pair cannot agree with itself while disagreeing with the files, and a
+# rung added to the ladder is required in the paragraph the day it is added.
+# The default rung is not in this loop — CODER_LINE pins it, and in this
+# paragraph its name and effort are split across a line break.
+for variant, rung in sorted(LADDER.items()):
+    pair = f"`opulent:{variant}` ({rung})"
+    if pair not in LADDER_PARA:
+        raise SystemExit(
+            f"hooks/session-start.py: LADDER_PARA does not say {pair!r} — the "
+            f"paragraph that teaches the ladder names every rung beside the "
+            f"default, each at the effort agents/{variant}.md actually runs at")
+# What eco substitutes IN has to teach the same ladder, capped: the two rungs
+# it denies and the rung it sends them to. A stub would substitute cleanly and
+# say nothing. Backticked, because bare `opulent:coder` is a substring of the
+# three lanes beside it and would be satisfied by naming none of them.
+ECO_LADDER_PARA = constant(policy_ns, "ECO_LADDER_PARA", "hooks/session-start.py")
+for lane in ("`opulent:coder`", "`opulent:coder-max`", "`opulent:coder-high`"):
+    if lane not in ECO_LADDER_PARA:
+        raise SystemExit(
+            f"hooks/session-start.py: ECO_LADDER_PARA never names {lane} — the "
+            f"capped paragraph must say which rungs eco denies and where it "
+            f"sends them")
+print("session-start's eco substitutions have something to substitute")
 
 # The lane roster, pinned across every surface that names it. Derived from
 # agents/*.md frontmatter, so a renamed or deleted lane fails here instead of
@@ -217,20 +280,24 @@ for fn in sorted(os.listdir(os.path.join(REPO, "agents"))):
     if not fr.get("name") or not fr.get("model"):
         raise SystemExit(f"agents/{fn}: frontmatter must carry name and model")
     AGENTS[fr["name"]] = fr["model"].strip().lower()
-if len(AGENTS) != 7:
+if len(AGENTS) != 9:
     raise SystemExit(
-        f"agents/: expected the seven lane definitions, found {len(AGENTS)}: "
+        f"agents/: expected the nine lane definitions, found {len(AGENTS)}: "
         f"{', '.join(sorted(AGENTS))}")
-PRIMARY = sorted(n for n in AGENTS if n != "coder-eco")
+PRIMARY = sorted(n for n in AGENTS if n not in LADDER)
 if len(PRIMARY) != 6:
-    raise SystemExit(f"agents/: expected six primary lanes beside coder-eco, "
-                     f"found {', '.join(PRIMARY)}")
+    raise SystemExit(f"agents/: expected six primary lanes beside the coder "
+                     f"ladder variants, found {', '.join(PRIMARY)}")
 with open(os.path.join(REPO, "commands", "doctor.md"), encoding="utf-8") as fh:
     doctor_text = fh.read()
 with open(os.path.join(REPO, "README.md"), encoding="utf-8") as fh:
     readme_text = fh.read()
+# Matched WITH its backticks, which is how all three surfaces render a lane
+# name. Bare, `opulent:coder` is a substring of the three other rungs, so the
+# default rung could be deleted from any of these documents and go on being
+# "found" by the coder-max row sitting beside it.
 for name in PRIMARY:
-    lane = "opulent:" + name
+    lane = "`opulent:" + name + "`"
     for where, text in (("hooks/session-start.py CONTEXT", CONTEXT),
                         ("commands/doctor.md", doctor_text),
                         ("README.md", readme_text)):
@@ -238,7 +305,7 @@ for name in PRIMARY:
             raise SystemExit(f"{where}: lane {lane} is registered in agents/ "
                              f"but never named here")
 for name, model in sorted(AGENTS.items()):
-    lane = "opulent:" + name
+    lane = "`opulent:" + name + "`"
     rows = [l for l in readme_text.splitlines() if lane in l and "|" in l]
     if not rows:
         raise SystemExit(f"README.md: no routing-table row names {lane}")
@@ -250,10 +317,31 @@ for name, model in sorted(AGENTS.items()):
 print("lane roster pinned across agents/, session-start, doctor.md, README: "
       + ", ".join(PRIMARY))
 
+# What eco caps, read from the hook rather than retyped — a constant CI retypes
+# is a constant CI cannot vouch for. Here CI reads the hook's own tuple and pins
+# the policy to it: eco caps the ladder's default rung and the one above it, and
+# nothing else. An entry added would deny a lane the policy still advertises —
+# eco denying every exploration is one name away — and an entry removed would
+# leave a rung the doctor calls capped spawnable. Every entry is also pinned to
+# a registered lane, plugin-qualified: the redirect logs its detail by slicing
+# "opulent:" off this name, and that slice's precondition is now CI-enforced.
+ECO_LANES = constant(routing, "ECO_LANES", "hooks/route-models.py")
+if tuple(ECO_LANES) != ("opulent:coder", "opulent:coder-max"):
+    raise SystemExit(
+        f"hooks/route-models.py: ECO_LANES is {tuple(ECO_LANES)!r} — eco caps "
+        f"the ladder's default rung and the rung above it, and no other lane")
+for lane in ECO_LANES:
+    if not lane.startswith("opulent:") or lane[len("opulent:"):] not in AGENTS:
+        raise SystemExit(
+            f"hooks/route-models.py: ECO_LANES names {lane!r}, which is not an "
+            f"`opulent:`-qualified lane registered in agents/ — the redirect's "
+            f"log detail slices that prefix off and would record a nonsense rung")
+print("eco caps exactly the lanes it says it caps: " + ", ".join(ECO_LANES))
+
 
 def lane_line(context, where):
     """The policy's implementation-lane line. Asserting on the whole document
-    is self-satisfying — the eco note names `opulent:coder-eco` as well, so a
+    is self-satisfying — the eco note names `opulent:coder-high` as well, so a
     substitution that quietly did nothing would still leave the string in the
     text. The lane line is the thing the session actually routes on."""
     for line in context.split("\n"):
@@ -273,18 +361,27 @@ if out.returncode != 0:
 payload = json.loads(out.stdout)
 context = payload["hookSpecificOutput"]["additionalContext"]
 plain_lane = lane_line(context, "session-start")
-# `"opulent:coder" in ...` is vacuous on its own — it is a substring of
-# `opulent:coder-eco`. The pair is what makes the plain policy plain.
-if "opulent:coder" not in plain_lane:
-    raise SystemExit(f"session-start: lane line names no coder lane: {plain_lane!r}")
-if "opulent:coder-eco" in plain_lane:
+# Delimited, because `"opulent:coder" in ...` is a substring of all three other
+# rungs: an undelimited needle is satisfied by a plain-session lane line
+# pointing at `opulent:coder-max`, which is the most expensive rung in the
+# cheapest circumstance — the worst failure a cost-routing plugin has. The
+# policy renders every lane name in backticks, so between them the string names
+# the default rung and nothing else.
+if "`opulent:coder`" not in plain_lane:
+    raise SystemExit(
+        f"session-start: the implementation lane is not the ladder's default "
+        f"rung `opulent:coder`: {plain_lane!r}")
+# Undelimited on purpose, which is the strict direction for a NEGATIVE check:
+# any spelling of the rung eco caps at, in a session that asked for no cap, is
+# the failure this is watching for.
+if "opulent:coder-high" in plain_lane:
     raise SystemExit(
         f"session-start: OPULENT_ECO is unset but the implementation lane is "
-        f"the eco twin: {plain_lane!r}")
+        f"the rung eco caps at: {plain_lane!r}")
 print("session-start emits valid JSON with routing policy")
 
-# Under OPULENT_ECO the lane line itself has to name the twin: a policy still
-# pointing at `opulent:coder` would aim the session at the one lane the
+# Under OPULENT_ECO the lane line itself has to name the high rung: a policy
+# still pointing at `opulent:coder` would aim the session at the one lane the
 # routing hook is denying, and every implementation task would open on a
 # refusal.
 eco = subprocess.run([sys.executable, hook], capture_output=True, text=True,
@@ -294,16 +391,34 @@ if eco.returncode != 0:
     raise SystemExit(f"session-start.py exited {eco.returncode} under OPULENT_ECO")
 eco_context = json.loads(eco.stdout)["hookSpecificOutput"]["additionalContext"]
 eco_lane = lane_line(eco_context, "session-start under OPULENT_ECO")
-if "opulent:coder-eco" not in eco_lane:
+if "`opulent:coder-high`" not in eco_lane:
     raise SystemExit(
         f"session-start: OPULENT_ECO is set but the implementation lane is "
         f"still {eco_lane!r}")
-print("session-start names the eco lane under OPULENT_ECO")
+# Eco mode caps the ladder, not one lane, so the whole ladder paragraph is
+# swapped for its capped version. Checked in BOTH directions, because either
+# half alone is satisfiable by accident: a needle like `opulent:coder-max`
+# arrives from ECO_NOTE and from the un-swapped paragraph whether or not the
+# substitution ran, so the capped paragraph must be present AND the un-capped
+# one absent. Un-capped and surviving is the live failure: the session reads
+# "escalate to `opulent:coder-max`" and finds out by being refused.
+if ECO_LADDER_PARA not in eco_context:
+    raise SystemExit(
+        "session-start: OPULENT_ECO is set but the policy does not carry "
+        "ECO_LADDER_PARA — the ladder paragraph was never swapped for the "
+        "capped version of itself")
+if LADDER_PARA in eco_context:
+    raise SystemExit(
+        "session-start: OPULENT_ECO is set but the un-capped LADDER_PARA is "
+        "still in the policy — the session is being taught to escalate to the "
+        "rungs the routing hook denies")
+print("session-start names the eco lane and swaps in the capped ladder "
+      "under OPULENT_ECO")
 
 # Telemetry vocabulary: the session opens with a summary of the routing log,
 # and an event type it cannot count is a lane change nobody can audit.
 with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
-    fh.write('{"t": "2026-08-06T00:00:00+00:00", "event": "delegate", "detail": "opulent:coder-eco"}\n')
+    fh.write('{"t": "2026-08-06T00:00:00+00:00", "event": "delegate", "detail": "opulent:coder-high"}\n')
     fh.write('{"t": "2026-08-06T00:00:01+00:00", "event": "eco", "detail": "eco:coder"}\n')
     telemetry_log = fh.name
 try:

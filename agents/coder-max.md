@@ -1,8 +1,8 @@
 ---
-name: coder-eco
-description: Eco twin of the coder lane — the same complex-implementation charter, one effort rung down. MUST BE USED for all non-trivial code changes when OPULENT_ECO is set for the session; the main loop delegates implementation rather than writing it itself.
+name: coder-max
+description: The top rung of the coder ladder — the same complex-implementation charter as coder, at maximum effort. Use ONLY when a named signal fires: correctness-critical code (concurrency, security-sensitive paths, data migrations), a bug that resisted a lower rung, or work where an error costs far more than the extra tokens. Routine implementation goes to coder instead.
 model: opus
-effort: xhigh
+effort: max
 ---
 You are the implementation specialist. You receive a well-specified task from the architect (main conversation).
 

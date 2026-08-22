@@ -12,9 +12,11 @@ failed.
    copy under `~/.claude/plugins/` and flag the anomaly.
 
 2. **Agents registered.** From your own available-agents list: are
-   `opulent:coder`, `opulent:mechanic`, `opulent:test-runner`,
-   `opulent:ui-checker`, `opulent:scribe`, and `opulent:scout` present?
-   Name any that are missing.
+   `opulent:coder`, `opulent:coder-max`, `opulent:coder-high`,
+   `opulent:coder-lite`, `opulent:mechanic`, `opulent:test-runner`,
+   `opulent:ui-checker`, `opulent:scribe`, and `opulent:scout` present? Name
+   any that are missing. (The four coder rungs are one ladder; eco mode caps
+   it at `opulent:coder-high`, checked in step 4.)
 
 3. **Policy injected.** Is the "Model routing policy (opulent plugin)" text
    present in your current session context? Yes means the SessionStart hook
@@ -43,11 +45,13 @@ failed.
 
    `OPULENT_ECO` is a separate dial and changes nothing about this probe. If
    it is set, report eco mode as **ON**, not as a fault: the implementation
-   lane for the session is `opulent:coder-eco` (Opus, effort xhigh), and a
-   spawn of `opulent:coder` is *expected* to be denied with a redirect to the
-   twin — that denial is eco mode working. Confirm `opulent:coder-eco` is in
-   your available-agents list while you are there; eco mode with no twin
-   registered leaves implementation with nowhere to go.
+   lane for the session is `opulent:coder-high` (Opus, effort high), and a
+   spawn of `opulent:coder` OR `opulent:coder-max` is *expected* to be denied
+   with a redirect there — that denial is eco mode capping the ladder,
+   working as asked. `opulent:coder-lite` stays spawnable either way. Confirm
+   `opulent:coder-high` is in your available-agents list while you are there;
+   eco mode with the cap's rung unregistered leaves implementation with
+   nowhere to go.
 
 5. **Telemetry.** Tail the routing log — `$OPULENT_LOG` if set, else
    `~/.claude/opulent-log.jsonl`: total lines, counts per event, timestamp of
@@ -58,7 +62,8 @@ failed.
    clean, checkout --, restore, stash drop — logged, not denied), `unparsed`
    (a command the parser could not read, so any write in it happened
    unaudited), `probe` (the doctor's own canary denial), and `eco` (the
-   `opulent:coder` redirect under `OPULENT_ECO`). `probe` and `eco` are
+   capped-ladder redirect under `OPULENT_ECO` — detail `eco:coder` or
+   `eco:coder-max`, naming the rung that was capped). `probe` and `eco` are
    their own events for one shared reason: a denial the operator asked for
    must not inflate the denial count. Since 0.11.3 each line carries `sid`
    (session id) and resolved absolute paths, and a fresh install's

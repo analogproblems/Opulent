@@ -6,16 +6,31 @@ invisible — invisible enforcement is unloved enforcement."""
 import json
 import os
 
+# Spliced into CONTEXT rather than typed into it, and therefore defined above
+# it: eco mode replaces this paragraph wholesale, and a constant that merely
+# looked like the text in CONTEXT would substitute nothing the day the two
+# drifted apart. CODER_LINE below is the older, hand-matched form of the same
+# trick — which is why CI checks that it still matches.
+LADDER_PARA = """The coder lane is a ladder — one charter, four effort rungs. Default to `opulent:coder`
+(xhigh). Escalate to `opulent:coder-max` (max) only on a named signal: correctness-critical
+code (concurrency, security-sensitive paths, data migrations) or a lower rung's attempt failed
+review or tests. Drop to `opulent:coder-high` (high) for solid work where xhigh's depth isn't
+earning its tokens, or to `opulent:coder-lite` (medium) for bounded, well-specified work that
+needs Opus judgment but not deep exploration. When unsure, take the default rung — a misroute
+self-corrects: if a rung's output fails verification, resubmit one rung up."""
+
 CONTEXT = """# Model routing policy (opulent plugin)
 
 The main conversation is the architect/orchestrator only. Delegate execution:
 
-- Complex implementation -> `opulent:coder` agent (Opus). Give it a full spec: files, approach, constraints.
+- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh). Give it a full spec: files, approach, constraints.
 - Routine/mechanical edits -> `opulent:mechanic` agent (Sonnet). Give exact instructions.
 - Tests, builds, linters, typechecks -> `opulent:test-runner` agent (Sonnet). Delegate anything beyond a quick one-off check.
 - Visual/UI verification (screenshots, rendered pages, console errors) -> `opulent:ui-checker` agent (Sonnet).
 - Documentation beyond a one-line fix (READMEs, guides, ADRs, release notes) -> `opulent:scribe` agent (Opus); trivial doc tweaks stay with `opulent:mechanic`.
 - Reading/searching/exploration -> `opulent:scout` agent (Haiku) for anything beyond a single known file. Use it instead of the built-in Explore agent. Scout LOCATES only — never ask it to analyze, judge, or diagnose; interpretation stays with you or an Opus lane.
+
+""" + LADDER_PARA + """
 
 Tier by task fit, not cost: judgment and complexity -> Opus lanes; bounded mechanical execution and
 verification -> Sonnet lanes; locating and reading -> Haiku scout. When a task straddles tiers, split
@@ -56,16 +71,22 @@ executor changes.
 Escalation: if a problem exceeds your reach after honest attempts, say so plainly and recommend
 the user take it to a stronger model in a dedicated session - do not burn the budget flailing."""
 
-# Eco mode (OPULENT_ECO) swaps the implementation lane for its one-rung-down
-# twin. A substitution rather than a second copy of the policy — two copies of
-# this text would drift, and only one of them would be the one anyone reads.
-CODER_LINE = ("- Complex implementation -> `opulent:coder` agent (Opus). "
+# Eco mode (OPULENT_ECO) swaps the implementation lane for the ladder's high
+# rung — an ordinary rung anyone can spawn, which eco simply caps the ladder at
+# — and the ladder paragraph for the capped version of itself. Two
+# substitutions rather than a second copy of the policy — two copies of this
+# text would drift, and only one of them would be the one anyone reads.
+CODER_LINE = ("- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh). "
               "Give it a full spec: files, approach, constraints.")
-ECO_CODER_LINE = ("- Complex implementation -> `opulent:coder-eco` agent (Opus, effort xhigh "
-                  "— eco mode). Give it a full spec: files, approach, constraints.")
-ECO_NOTE = ("\n\nEco mode is on for this session (OPULENT_ECO): implementation runs on the "
-            "`opulent:coder-eco` twin, and the routing hook denies `opulent:coder` with a "
-            "redirect to it. Every other lane is unchanged.")
+ECO_CODER_LINE = ("- Complex implementation -> `opulent:coder-high` agent (Opus, effort high "
+                  "— eco cap). Give it a full spec: files, approach, constraints.")
+ECO_LADDER_PARA = (
+    "Eco mode caps the coder ladder: `opulent:coder` and `opulent:coder-max` are denied with a\n"
+    "redirect to `opulent:coder-high` (high). The cheaper rungs stay available — voluntarily\n"
+    "spending less is never a routing violation.")
+ECO_NOTE = ("\n\nEco mode is on for this session (OPULENT_ECO): implementation is capped at the "
+            "`opulent:coder-high` rung, and the routing hook denies `opulent:coder` and "
+            "`opulent:coder-max` with a redirect to it. Every other lane is unchanged.")
 
 
 # Spelled out rather than imported: hooks are standalone scripts, invoked by
@@ -92,12 +113,14 @@ OFF_NOTE = ("\n\nEnforcement is OFF for this session (OPULENT_OFF): the "
 
 
 def _policy():
-    """The routing policy, with the implementation lane swapped for its eco
-    twin when the session asked for one, and the enforcement paragraph
-    corrected when enforcement is not actually running."""
+    """The routing policy, with the implementation lane swapped for the
+    ladder's high rung and the ladder capped there when the session asked for
+    it, and the enforcement paragraph corrected when enforcement is not
+    actually running."""
     text = CONTEXT
     if dial("OPULENT_ECO"):
-        text = text.replace(CODER_LINE, ECO_CODER_LINE) + ECO_NOTE
+        text = (text.replace(CODER_LINE, ECO_CODER_LINE)
+                    .replace(LADDER_PARA, ECO_LADDER_PARA) + ECO_NOTE)
     if dial("OPULENT_OFF"):
         text += OFF_NOTE
     return text
