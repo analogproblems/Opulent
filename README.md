@@ -4,9 +4,13 @@
 
 Welcome to **Opulent**! 👋
 
-If you use Claude Code for long sessions, you already know the problem: the conversation you're actually having fills up with file bodies, test outputs, and search results you never needed to read. The model you're talking to ends up spending its context window on clutter.
+If you use Claude Code for long sessions, you already know the problem: routing every single command through your most powerful model burns through tokens at an alarming rate. You end up paying premium token costs just to have your primary model read routine test outputs, execute basic file edits, or search the codebase.
 
-Opulent solves this through strict **context hygiene**. Your best coding model (typically Opus 5) stays in the architect seat—designing, reviewing, and orchestrating. All the execution—editing files, running tests, searching the codebase—gets pushed into separate, purpose-built agent sessions. The bulk lands there and is thrown away, keeping your main conversation clean and lean deep into your workflow.
+Opulent solves this by intelligently dividing the workload across Anthropic's model family based on their recommended use cases, drastically reducing your token spend.
+
+Your most capable model (typically Opus 5) stays in the architect seat—designing, reviewing, and orchestrating the broader workflow. Meanwhile, all the high-volume execution—like grepping files, running tests, and applying standard code edits—is automatically delegated to faster, cost-effective models like Haiku or Sonnet.
+
+By routing the bulk data to the right tool for the job, Opulent preserves your expensive tokens for complex reasoning and keeps your sessions incredibly efficient.
 
 ---
 
