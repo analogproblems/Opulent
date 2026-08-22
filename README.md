@@ -8,7 +8,7 @@ If you use Claude Code for long sessions, you already know the problem: routing 
 
 Opulent solves this by intelligently dividing the workload across Anthropic's model family based on their recommended use cases, drastically reducing your token spend.
 
-Your most capable model (typically Opus 5) stays in the architect seat—designing, reviewing, and orchestrating the broader workflow. Meanwhile, all the high-volume execution—like grepping files, running tests, and applying standard code edits—is automatically delegated to faster, cost-effective models like Haiku or Sonnet.
+Your most capable model (Opus 5 or Fable) stays in the architect seat—designing, reviewing, and orchestrating the broader workflow. Meanwhile, all the high-volume execution—like grepping files, running tests, and applying standard code edits—is automatically delegated to faster, cost-effective models like Haiku or Sonnet.
 
 By routing the bulk data to the right tool for the job, Opulent preserves your expensive tokens for complex reasoning and keeps your sessions incredibly efficient.
 
