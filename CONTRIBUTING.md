@@ -45,9 +45,18 @@ marketplace update detection — a version-less change never reaches installed
 users), add a CHANGELOG entry that says *why*, and tag with
 `claude plugin tag <path> --push` (`{plugin}--v{version}`).
 
-Adding an implementation lane (unrestricted-tools agent)? lens-master's
-IMPL_LANES must learn it in the same release window — its drift guard will
-fail against our main until it does.
+Adding or renaming an implementation lane (an unrestricted-tools agent)?
+lens-master's IMPL_LANES must learn it in the same release window — and
+don't learn that from lens-master's CI after you push. Run its drift guard
+against your working tree before tagging:
+
+    OPULENT_REPO=. python3 /path/to/lens-master/tests/lane_drift_guard.py
+
+A clean run means every write-capable lane here is known to the bridge; a
+failure names exactly the lanes to add. The 0.12.0 coder ladder shipped
+without this step and was caught downstream by lens-master's CI (its
+1.24.1) — the guard works either way, but upstream it costs one command
+instead of a release.
 
 ## Design constraints worth knowing before you propose things
 
