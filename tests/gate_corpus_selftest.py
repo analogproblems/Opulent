@@ -15,8 +15,17 @@ exact bug that motivated the rewrite.
 The stored-term case is the other missing witness. `DENY` had no positive
 control at all — emptying the whole list left the suite green, because a clean
 repo scans clean whether matching works or not. `stored term in an ordinary
-commit` is that control: it fails if `DENY` is empty, if matching breaks, or
-if the corpus stops reaching ordinary blobs.
+commit` is that control.
+
+Since 0.12.1 it plants a term of its own invention into a COPY of the gate
+rather than harvesting a real one, because the real list is empty: every term
+it held named an internal of the companion plugin, and the companion is public
+now. Harvesting was only ever how these cases got hold of a denied string
+without writing one down; the property under test is that the stored-term path
+and the tag path are wired at all. A synthetic entry proves that whether or
+not a real secret happens to exist, which is the right coupling — a suite that
+goes dark the moment there is nothing to keep secret is a suite that stops
+watching exactly when the list is easiest to break.
 
 Two cases plant in a place the corpus always saw and vary the TERM instead —
 its splitting and its casing — because both halves of matching decayed
@@ -28,9 +37,8 @@ The refusal paths are corpus properties too, and get cases here: a shallow
 clone, a directory that is not a repository, and a git that dies mid-scan
 must each end nonzero — a scan that could not read the object database has
 not cleared it, and until now every one of those refusals was deletable with
-both suites green. DENY_TAGS gets the positive control DENY already has: its
-glob is read out of the gate at runtime and a matching tag synthesized, so an
-emptied list fails loudly here instead of passing silently forever.
+both suites green. DENY_TAGS gets the positive control DENY already has, built
+the same synthetic way and for the same reason.
 
     python3 tests/gate_corpus_selftest.py
 """
@@ -57,35 +65,43 @@ atexit.register(shutil.rmtree, ROOT, ignore_errors=True)
 SECRET = "zebrahorse"
 
 
-def first_stored_term(gate_path):
-    """A real DENY entry, read out of the gate rather than copied in here.
-
-    The first draft of this file spelled one out as a constant, and the gate
-    failed the very next run — correctly, because a denied term written into a
-    published test file is residue like any other. Reading it at runtime keeps
-    the positive control real without writing the term down, and it cannot go
-    stale when the list changes."""
-    src = open(gate_path, encoding="utf-8").read()
-    m = re.search(r'Term\(\s*"((?:[^"\\]|\\.)*)"', src[src.index("DENY = ["):])
-    return m.group(1) if m else ""
+# Invented here, like SECRET above, and for the same reason: these are
+# fixtures. Earlier revisions harvested a real entry out of the gate, because
+# spelling a genuinely denied term into a published test file is residue like
+# any other — the first draft of this file did exactly that and the gate failed
+# it on the next run, correctly. With the stored lists empty there is nothing
+# left to harvest, and nothing that needs to be.
+STORED = "zebracontrol"
+DENY_TAG_GLOB = "zebrarelease--v*"
 
 
-STORED = first_stored_term(GATE)
+def synthetic_gate():
+    """A copy of the gate whose stored lists carry one invented entry each.
+
+    Substituted onto the empty literals by exact match, so the day either list
+    holds real entries again this raises instead of quietly testing a gate that
+    is not the gate. The copy is what the two positive controls below run: they
+    are about whether the stored-term path and the tag path still match, catch
+    and report, which is a property of the machinery and not of the list."""
+    src = open(GATE, encoding="utf-8").read()
+    for old, new in (
+            ("DENY = []",
+             f'DENY = [Term("{STORED}", "an invented positive control")]'),
+            ("DENY_TAGS = []",
+             f'DENY_TAGS = [("{DENY_TAG_GLOB}", "an invented positive control")]')):
+        if src.count(old) != 1:
+            raise SystemExit(
+                f"gate_corpus_selftest: {old!r} appears {src.count(old)} times "
+                f"in {GATE}, expected exactly once — the stored lists have "
+                f"changed shape and these controls would be testing a gate "
+                f"nobody wrote")
+        src = src.replace(old, new, 1)
+    path = os.path.join(ROOT, "synthetic_gate.py")
+    Path(path).write_text(src, encoding="utf-8")
+    return path
 
 
-def first_deny_tag(gate_path):
-    """A real DENY_TAGS glob, read out of the gate at runtime for the same
-    reason as first_stored_term: a denied pattern spelled into a published
-    test file is residue, and a copy goes stale the day the list changes.
-    Returns "" when the list is empty — which the case below treats as its
-    own failure, because an emptied DENY_TAGS leaves the tag path with
-    nothing to hunt and no test that would ever say so."""
-    src = open(gate_path, encoding="utf-8").read()
-    m = re.search(r'DENY_TAGS\s*=\s*\[\s*\(\s*"((?:[^"\\]|\\.)*)"', src)
-    return m.group(1) if m else ""
-
-
-DENY_TAG_GLOB = first_deny_tag(GATE)
+SYNTHETIC_GATE = synthetic_gate()
 
 GIT_CONF = ["-c", "user.name=t", "-c", "user.email=t@t",
             "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"]
@@ -178,7 +194,8 @@ def filename_only(repo):
 
 def stored_term(repo):
     """A stored DENY term in an ordinary commit: the positive control the
-    stored half never had."""
+    stored half never had. Run against SYNTHETIC_GATE, which is where the
+    term it plants is actually denied."""
     (Path(repo) / "notes.md").write_text(f"see the {STORED} transcripts\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "reference")
@@ -231,12 +248,12 @@ def stashed_content(repo):
     git(repo, "stash", "push", "-q")
 
 
-def run_gate(repo, private=None):
+def run_gate(repo, private=None, gate=None):
     env = dict(os.environ)
     env.pop("PUBLIC_GATE_PRIVATE_TERMS", None)
     if private:
         env["PUBLIC_GATE_PRIVATE_TERMS"] = private
-    p = subprocess.run([sys.executable, GATE, "--repo", repo],
+    p = subprocess.run([sys.executable, gate or GATE, "--repo", repo],
                        capture_output=True, text=True, env=env)
     return p.returncode, p.stdout + p.stderr
 
@@ -249,7 +266,6 @@ CASES = [
     ("residue in an annotated tag message", tag_message, SECRET),
     ("residue in the committer field, author clean", committer_identity, SECRET),
     ("residue in a filename, not in any content", filename_only, SECRET),
-    ("a stored DENY term in an ordinary commit", stored_term, None),
     ("residue spelled in the other Unicode normal form", nfd_spelling, "josé"),
     ("residue matched by line two of a multi-line private value",
      ordinary_commit, f"first-line-decoy\n{SECRET}"),
@@ -352,29 +368,38 @@ def main():
           + ("" if ok else "  <- certified a history it could not read"))
     failures += not ok
 
-    # DENY_TAGS' positive control: a tag synthesized at runtime from the
-    # gate's own glob must fail the scan and be named in the report. An
-    # empty list is itself the failure — the case a silently-emptied
-    # DENY_TAGS would otherwise never produce.
-    if not DENY_TAG_GLOB:
-        print("FAIL  a tag matching a DENY_TAGS glob fails the gate"
-              "  <- DENY_TAGS is empty: the tag path has nothing to hunt")
-        failures += 1
-    else:
-        repo = new_repo("denied-tag")
-        tag = DENY_TAG_GLOB.replace("*", "0.0.0").replace("?", "x")
-        git(repo, "tag", tag)
-        code, out = run_gate(repo)
-        ok = code != 0 and tag in out
-        print(f"{'PASS' if ok else 'FAIL'}  a tag matching a DENY_TAGS glob "
-              f"fails the gate"
-              + ("" if ok else ("  <- scanned CLEAN (the tag glob path is dead)"
-                                if code == 0 else
-                                "  <- failed without naming the tag")))
-        failures += not ok
+    # The two stored-list positive controls, run against SYNTHETIC_GATE. Both
+    # ask the same question the real lists can no longer ask while empty: does
+    # a stored entry still match, fail the scan, and get named in the report?
+    # A stored term is printed in full when it hits — it is not a secret — so
+    # both cases require the planted value in the output, not merely a nonzero
+    # exit, which is what tells a deleted report path from a working one.
+    repo = new_repo("stored-term")
+    stored_term(repo)
+    code, out = run_gate(repo, gate=SYNTHETIC_GATE)
+    ok = code != 0 and STORED in out
+    print(f"{'PASS' if ok else 'FAIL'}  a stored DENY term in an ordinary "
+          f"commit fails the gate"
+          + ("" if ok else ("  <- scanned CLEAN (the stored-term path is dead)"
+                            if code == 0 else
+                            "  <- failed without naming the term")))
+    failures += not ok
 
-    # CASES, the censor-offsets case, three refusals, and the tag glob.
-    total = len(CASES) + 5
+    repo = new_repo("denied-tag")
+    tag = DENY_TAG_GLOB.replace("*", "0.0.0").replace("?", "x")
+    git(repo, "tag", tag)
+    code, out = run_gate(repo, gate=SYNTHETIC_GATE)
+    ok = code != 0 and tag in out
+    print(f"{'PASS' if ok else 'FAIL'}  a tag matching a DENY_TAGS glob "
+          f"fails the gate"
+          + ("" if ok else ("  <- scanned CLEAN (the tag glob path is dead)"
+                            if code == 0 else
+                            "  <- failed without naming the tag")))
+    failures += not ok
+
+    # CASES, the censor-offsets case, three refusals, and the two stored-list
+    # controls.
+    total = len(CASES) + 6
     print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 

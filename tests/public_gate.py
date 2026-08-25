@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """Public-hygiene gate: scans the whole object database for private residue.
 
-lens-master ships from its own private repo now. Its *existence* is public on
-purpose — the README documents the companion contracts, and the doctor probes
-its hook by name — but its internals are not: the matcher constants, the
-escape-hatch variables, the file paths they lived at, and its release prose.
-A working tree can be cleaned in an afternoon; a history keeps every draft of
-it forever. So this reads the object database — literally every object git
+The companion plugin is public. It shipped from a private repo when this gate
+was written, and the stored list below hunted its internals — the matcher
+constants, the escape-hatch variables, the file paths they lived at, and its
+release prose. Every one of those is published today in lens-library's own
+public repo, under lens-library's own name, so the list they justified is
+empty as of 0.12.1.
+
+What is left is the machinery, which was never about that plugin. A working
+tree can be cleaned in an afternoon; a history keeps every draft of it
+forever. So this reads the object database — literally every object git
 holds, via `cat-file --batch-all-objects`, plus every ref name — rather than
-the checkout.
+the checkout. That is the corpus the identity terms still run over, and the
+corpus a new stored term would run over the day one is needed.
 
 It read `git log --all -p` until 2026-08-13, and that was not the object
 database: `log -p` renders reachable-history *diffs*, a strict subset that
@@ -16,7 +21,7 @@ omits merge-commit conflict resolutions (`-p` prints no patch for a merge),
 unreachable and reflog-held objects, binary blobs, annotated tag messages,
 committer identity, and refs outside heads/remotes. The miss was not
 theoretical — this gate certified a checkout clean while all ten stored terms
-sat in its object database, in objects `log` cannot reach. Enumerating objects
+of the day sat in its object database, in objects `log` cannot reach. Enumerating objects
 instead closes that whole family at once, because there is nothing under an
 object database that `--batch-all-objects` does not enumerate.
 
@@ -29,7 +34,9 @@ Three properties worth stating out loud:
   worse than a false alarm.
 - **It is a denylist.** It proves the absence of the terms below and nothing
   more. A leak nobody wrote down is a leak nobody is checking for, so a new
-  private mechanism means a new entry here, in the same commit.
+  private mechanism means a new entry here, in the same commit. An empty
+  stored list therefore says one thing only — that no stored mechanism is
+  private right now — and never that the check has been switched off.
 - **It cannot store every term it hunts.** Each entry below names a
   *mechanism*, and a mechanism's name is safe to print beside the proof that
   it is gone. An identity is not like that — for a real name or an old
@@ -68,50 +75,33 @@ from collections import namedtuple
 #          redaction below reads.
 Term = namedtuple("Term", "text leak label secret", defaults=(None, False))
 
-DENY = [
-    Term("supersmart",
-         "the private predecessor plugin, whose pressure-campaign transcripts "
-         "are the evidence base behind several shipped hooks"),
-    Term("lens_danger_off",
-         "lens-master's danger-hook escape hatch — publishing the name of the "
-         "switch that turns an enforcement hook off is publishing the bypass"),
-    Term("keeper_re",
-         "the Secret Keeper matcher constant — naming it exposes the shape of "
-         "what the hook catches, and by omission what it misses"),
-    Term("undertaker_re",
-         "the Data Undertaker matcher constant — same exposure"),
-    Term("git_destroy_re",
-         "the git-destruction matcher constant — same exposure, over the "
-         "family whose miss is unrecoverable"),
-    Term("danger-lenses.py",
-         "the danger hook's filename: a path that exists only in the private "
-         "repo, and a pointer to the file a reader would go looking for"),
-    Term("lens-master/hooks",
-         "an in-tree path from when the two plugins shared a repo — the bare "
-         "name in prose is fine, a path under it is residue"),
-    Term("lens-master/tests",
-         "likewise: the companion's suite moved out with the companion"),
-    Term("danger_matchers",
-         "the matcher unit test, moved to the private repo with the hook it "
-         "covers"),
-    # A heading, not the bare name. `lens-master` in prose is ALLOWED and
-    # deliberate — the README's companion section and the CONTRIBUTING
-    # checklist both name it. Only the release prose is private, and a "## "
-    # heading is what that prose is filed under.
-    Term("## lens-master",
-         "a changelog heading: the companion's release notes are its own "
-         "repo's to publish"),
-]
+# Empty as of 0.12.1, and empty on purpose rather than by neglect. Every term
+# this list held named an internal of the companion plugin — its matcher
+# constants, its danger-hook escape hatch, the filenames they lived in, the
+# shared-repo paths from before the split, its release-note headings — and all
+# of them ship publicly today in lens-library's own repo. A denylist entry
+# whose subject is published is worse than no entry at all: it fails a gate
+# nobody can satisfy, and it teaches the next reader that a public name is a
+# secret one.
+#
+# This list is the part of the gate meant to change. A new private mechanism
+# means a new Term here, in the commit that creates it. An identity is the one
+# thing that never goes here — those arrive through PUBLIC_GATE_PRIVATE_TERMS
+# below, for the reason spelled out there.
+DENY = []
 
 # Tag names are matched as globs rather than substrings, because the residue
-# here is a naming convention: every pre-split release of the companion was
-# tagged in the shared repo, and those tags belong to the private archive.
-DENY_TAGS = [("lens-master--v*", "a companion release tag from the shared repo")]
+# this path exists for is a naming convention rather than a word. Empty for the
+# same reason the list above is: its one glob covered the companion's pre-split
+# release tags, those releases are public now, and no tag here matches it.
+DENY_TAGS = []
 
 # This file names every term it hunts for, so scanning it would flag it — the
-# gate would be its own only finding, forever. Excluded by path, which is the
-# honest trade: residue hidden *inside* this file is the one place the gate
-# cannot see, and that is a thing a reviewer of this file can see instead.
+# gate would be its own only finding, forever. That stays true of every past
+# revision now that the stored list is empty, which is what SELF_MARKER below
+# is for. Excluded by path, which is the honest trade: residue hidden *inside*
+# this file is the one place the gate cannot see, and that is a thing a
+# reviewer of this file can see instead.
 SELF = "tests/public_gate.py"
 
 # Recognises a copy of this file by content, not just by path — every past
@@ -487,7 +477,7 @@ def main(repo):
         #
         # Both sides still go out through say(), and each side needs it for its
         # own reason. On the non-secret side a *stored* term's matched line is
-        # printed in full, and a line carrying `lens-master/hooks` is exactly
+        # printed in full, and a line carrying a stored path term is exactly
         # the kind of line that carries `/home/<username>/` in front of it. On
         # the secret side the location can be the term: a ref-name hit is
         # located at the name that leaked, so the censor is what makes printing
@@ -506,6 +496,16 @@ def main(repo):
             f"\npublic gate: {total} denied term(s) present. This history is "
             f"not publishable — the residue lives in the object database, so "
             f"editing the working tree does not remove it."))
+    # A gate with nothing to hunt reports that, not "clean". Green on an empty
+    # search is the shape of a check that has quietly stopped checking, and
+    # this file's whole argument is that a scan which cleared nothing must
+    # never read as a scan that cleared something.
+    if not terms and not DENY_TAGS:
+        say("public gate: nothing to scan for — the stored list, the tag "
+            "globs and " + PRIVATE_ENV + " are all empty. The corpus was read "
+            "and holds no residue of anything this gate was told to hunt, "
+            "which is not the same as holding none.")
+        return
     say(f"public gate: clean — none of the {len(DENY)} denied terms, "
         f"{len(PRIVATE)} private terms or {len(DENY_TAGS)} denied tag "
         f"patterns appear anywhere in the object database")

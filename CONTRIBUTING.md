@@ -46,17 +46,17 @@ users), add a CHANGELOG entry that says *why*, and tag with
 `claude plugin tag <path> --push` (`{plugin}--v{version}`).
 
 Adding or renaming an implementation lane (an unrestricted-tools agent)?
-lens-master's IMPL_LANES must learn it in the same release window — and
-don't learn that from lens-master's CI after you push. Run its drift guard
+lens-library's IMPL_LANES must learn it in the same release window — and
+don't learn that from lens-library's CI after you push. Run its drift guard
 against your working tree before tagging:
 
-    OPULENT_REPO=. python3 /path/to/lens-master/tests/lane_drift_guard.py
+    OPULENT_REPO=. python3 /path/to/lens-library/tests/lane_drift_guard.py
 
 A clean run means every write-capable lane here is known to the bridge; a
 failure names exactly the lanes to add. The 0.12.0 coder ladder shipped
-without this step and was caught downstream by lens-master's CI (its
-1.24.1) — the guard works either way, but upstream it costs one command
-instead of a release.
+without this step and was caught downstream by the companion's CI (then
+still named lens-master, at its 1.24.1) — the guard works either way, but
+upstream it costs one command instead of a release.
 
 ## Design constraints worth knowing before you propose things
 
@@ -68,7 +68,7 @@ instead of a release.
   & Honesty" section. PRs that chase perfect enforcement by
   blocking ever-more Bash will lose to the ergonomics they cost.
 - **The plugins must stay independently installable.** opulent must not
-  require lens-master, or vice versa.
+  require lens-library, or vice versa.
 - **Prompts are code.** Agent definitions carry contracts (coverage-first
   reporting, locate-only scout); dilute them and the tests won't catch it, but
   a fresh-context review will.

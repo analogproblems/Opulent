@@ -77,7 +77,7 @@ failed.
    silent gap wearing a different face. A high `edit` count is not a fault:
    it is the main loop working with the record intact.
 
-6. **Companion probe.** If you also run the lens-master plugin — skip on
+6. **Companion probe.** If you also run the lens-library plugin — skip on
    sight otherwise — and only when its agents are registered AND
    `git remote` prints something (a dry run still contacts the remote and
    can hang on a credential prompt, so a remoteless repo skips too): run

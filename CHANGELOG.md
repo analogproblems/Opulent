@@ -54,6 +54,42 @@ Eco mode's capped paragraph carries the same repricing, since the
 lite/high choice it still leaves open is exactly the one this release is
 about. No behavior change in the routing hook, no new denial path.
 
+**The public gate was guarding secrets that are not secret.** Its premise —
+that the companion plugin ships from a private repo whose internals must
+not appear here — stopped being true when lens-master was renamed to
+lens-library and published. Every term the stored list held (`supersmart`,
+the three matcher constants, the danger hook's escape hatch and filename,
+the shared-repo paths, the release-note heading, the pre-split tag glob)
+now ships in lens-library's own public repo, verified against its
+`origin/main` rather than a working tree. So the stored list and the tag
+globs are empty, with the reasoning kept in place: the list is the part of
+the gate meant to change, and a new private mechanism still means a new
+entry in the commit that creates it. The identity-term machinery, which is
+the half still doing work, is untouched.
+
+The alternative was a history rewrite to erase `lens-master/tests` from
+CONTRIBUTING.md — which would have been destructive for nothing. That
+commit is already on a public `origin/main` with a fork, so no force-push
+could retract it, and the path it names points into a public repository
+under a name that no longer exists.
+
+Two consequences worth naming. An empty stored list left the gate reporting
+"clean" over a search for nothing, which is the shape of a check that has
+quietly stopped checking; it now says it had nothing to hunt, and says that
+the corpus was read. And `gate_corpus_selftest.py` harvested its two
+positive controls out of the stored lists, so an empty list would have
+taken the suite red — it now plants invented entries into a copy of the
+gate, which tests the machinery whether or not a real secret happens to
+exist. That is the better coupling: a suite that goes dark the moment there
+is nothing to keep secret stops watching exactly when the list is easiest
+to break.
+
+**The companion's new name reaches the docs.** CONTRIBUTING.md and the
+doctor's companion probe said `lens-master` in six places, including the
+drift-guard path and a probe users are told to run by name. All now
+lens-library, bar one deliberate historical reference to the 0.12.0 catch,
+which happened under the old name.
+
 ## opulent 0.12.0 — 2026-08-22
 
 **The coder lane becomes a ladder.** One effort rung per lane was a
