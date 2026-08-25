@@ -22,8 +22,12 @@ Escape hatch: set OPULENT_OFF=1 in the environment to disable enforcement.
 Eco mode: set OPULENT_ECO=1 and the coder ladder is capped at its high rung —
 this hook then denies `opulent:coder` and `opulent:coder-max` with a redirect
 to `opulent:coder-high` (the ladder's ordinary high rung: same model and
-charter, effort high), while the cheaper rungs stay spawnable. Both dials are
-read from the environment, so both are session-granular.
+charter, effort high), while the cheaper rungs stay spawnable.
+Codex lane: set OPULENT_CODEX=1 and implementation leaves for another vendor —
+this hook then denies ALL FOUR coder rungs with a redirect to the
+`opulent-codex sol` command, which is not an agent and cannot be spawned.
+Codex takes precedence over eco, which caps a ladder that is closed. Every
+dial is read from the environment, so every one is session-granular.
 Telemetry: main-loop edits, test runs, removals, delegations and denials each
 append one JSON line to ~/.claude/opulent-log.jsonl (override path with
 OPULENT_LOG). Lines carry the payload's session id (first 8 chars) when one
@@ -138,6 +142,17 @@ CATCHALL_AGENTS = {"general-purpose", "claude"}
 # matches a lane it is not.
 ECO_LANES = ("opulent:coder", "opulent:coder-max")
 ECO_TWIN = "opulent:coder-high"
+
+# The Codex dial's claim on the same ladder, and a wider one: OPULENT_CODEX
+# sends implementation to another vendor, so all FOUR rungs are denied rather
+# than capped. Eco redirects to a rung — a cheaper way to do the same thing —
+# and this redirects to a command, because the Codex lane is not an agent and
+# cannot be spawned. That difference is the reason the two dials cannot share
+# a code path: one names a lane the architect can call next, the other names a
+# two-step the architect has to perform.
+CODEX_LANES = ("opulent:coder", "opulent:coder-lite", "opulent:coder-high",
+               "opulent:coder-max")
+CODEX_COMMAND = "opulent-codex sol"
 
 _OPERATORS = {";", "|", "||", "&&", "&", "(", ")", ";;", ";&", ";;&"}
 _REDIRECTS = {">", ">>", ">|", "&>", "&>>", ">&"}
@@ -1031,6 +1046,24 @@ def main():
                  "(opulent:coder, opulent:mechanic, opulent:test-runner, "
                  "opulent:scribe, opulent:scout, ...) or another purpose-defined "
                  "agent instead.", "catchall:" + st)
+        if dial("OPULENT_CODEX") and st in CODEX_LANES:
+            # Every rung, not the top two: the dial is not about spending less
+            # on Opus, it is about the work being judged somewhere else. A rung
+            # left spawnable would be a silent hole in exactly the routing the
+            # operator threw a switch to get.
+            # Logged as its own event for the same reason eco is: a redirect
+            # the operator asked for is not a denial, and counting it as one
+            # inflates the number the doctor reports.
+            deny("Routing policy: the Codex lane is on for this session "
+                 "(OPULENT_CODEX), so implementation is judged by another "
+                 "vendor rather than by '%s'. Write a self-contained brief to "
+                 "your scratchpad and run `%s <absolute dir> <brief path>` "
+                 "with run_in_background — codex shares none of this "
+                 "conversation, so the brief carries the working directory, "
+                 "the goal, the constraints and the acceptance checks. It "
+                 "blocks; the harness re-invokes you when it exits."
+                 % (st, CODEX_COMMAND),
+                 "codex:" + st[len("opulent:"):], event="codex")
         if dial("OPULENT_ECO") and st in ECO_LANES:
             # One-way: the cap's own rung, and every rung below it, are
             # spawnable whether or not eco is set, because voluntarily

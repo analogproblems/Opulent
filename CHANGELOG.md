@@ -10,6 +10,56 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.14.0 — 2026-08-24
+
+**A Codex lane, folded in from orrery.** `bin/opulent-codex` runs one pinned
+`codex exec` and reports what it actually did. Three modes: `sol` takes a
+brief you wrote and lets Codex hold the pen, `terra` is the cheap tier for
+bounded batch work, and `review` builds its own brief from a diff, runs
+read-only, and checks every `file:line` Codex cites against the tree before
+you read it — what it cannot verify prints as `UNVERIFIABLE` rather than
+disappearing, because a finding that cannot be located is worth seeing and
+worth distrusting.
+
+It blocks. That is the design: the run's lifetime is the process's lifetime,
+so the architect backgrounds it and the harness owns completion. Orrery
+learned that the other way round — a wrapper subagent backgrounded the run and
+polled a marker file, the subagent's turn ended, the harness handle and the
+watcher died while Codex kept going, and the plugin grew a run registry, claim
+files, staleness and orphan detection and a Stop hook to rebuild by hand the
+notification the harness already sends. Deleting the wrapper deleted the
+problem, and 13,185 lines became 931 before any of it moved here.
+
+**`OPULENT_CODEX` is the dial**, built from the pieces `OPULENT_ECO` already
+proved: the routing hook denies a set of lanes with a redirect, and
+session-start swaps the implementation line and the ladder paragraph for
+their alternates. Two differences, both load-bearing. Eco caps two rungs;
+this closes all four, because the point is not a cheaper way to do the same
+thing but the work being judged by a model that shares neither the vendor nor
+the conversation. And eco redirects to a lane the architect can spawn next,
+while this redirects to a command — so the dial does not merely change the
+target of delegation, it changes its shape, from one `Agent()` call to a
+brief on disk and a backgrounded run.
+
+The matrix stays narrow on purpose. Mechanic, test-runner, ui-checker, scribe
+and scout are untouched, and so is the architect: Codex shares none of the
+session, so a bounded mechanical edit pays for a full brief to buy nothing,
+and a second vendor adds nothing to running a test suite or locating a file.
+Luna is not here either — orrery retired that lane on 2026-08-04 against a
+benchmark that scored it a measured loss against `opulent:scout`.
+
+The doctor reports the dial and checks the lane is runnable; the activity line
+counts `codex` redirects the way it counts `eco` ones; and CI pins the new
+constants the way it pins eco's, plus one the eco pair never needed — that
+the command the redirect names is a file this plugin ships in `bin/` and is
+executable. A lane that is not registered fails loudly at spawn; a command
+that is not on PATH fails inside a Bash call and reads like Codex is broken.
+
+Behaviour is covered by `tests/codex_cases.py`: argv construction, exit-code
+passthrough, ledger shape, citation checking, and which files a run may be
+credited with changing. Twenty-nine checks, none of which reads a sentence.
+Verified end to end against codex-cli 0.149.1, both modes, before shipping.
+
 ## opulent 0.13.0 — 2026-08-24
 
 **The ladder priced escalation wrong.** Every cue that taught rung

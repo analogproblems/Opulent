@@ -61,13 +61,29 @@ failed.
    Explore redirects), `remove` (rm and destructive git — reset --hard,
    clean, checkout --, restore, stash drop — logged, not denied), `unparsed`
    (a command the parser could not read, so any write in it happened
-   unaudited), `probe` (the doctor's own canary denial), and `eco` (the
+   unaudited), `probe` (the doctor's own canary denial), `codex` (the
+   Codex-lane redirect under `OPULENT_CODEX` — detail `codex:coder`,
+   `codex:coder-lite`, `codex:coder-high` or `codex:coder-max`, naming the rung
+   that was closed), and `eco` (the
    capped-ladder redirect under `OPULENT_ECO` — detail `eco:coder` or
    `eco:coder-max`, naming the rung that was capped). `probe` and `eco` are
    their own events for one shared reason: a denial the operator asked for
    must not inflate the denial count. Since 0.11.3 each line carries `sid`
    (session id) and resolved absolute paths, and a fresh install's
    session-start line reads "No routing activity recorded yet".
+
+4b. **Codex lane.** Report `OPULENT_CODEX` as **ON** or **OFF**, not as a
+   fault. When it is ON, implementation for the session is `opulent-codex sol`
+   and a spawn of ANY coder rung — `opulent:coder`, `opulent:coder-lite`,
+   `opulent:coder-high`, `opulent:coder-max` — is *expected* to be denied with
+   a redirect there, logging as event `codex` with detail `codex:<rung>`. It
+   takes precedence over `OPULENT_ECO`, which caps a ladder the dial has
+   closed; if both are set, say so. Either way, check the lane is runnable:
+   `opulent-codex --help` must work (plugin `bin/` is on PATH in agent
+   context), and `codex --version` and `codex login status` must both succeed —
+   Codex is a prerequisite, not a bundled dependency. A dial that is ON with a
+   Codex that cannot run leaves implementation with nowhere to go, which is the
+   one state worth reporting loudly.
    Interpret honestly: no file + live enforcement = fresh install, fine; no
    file + recent heavy agent use = enforcement was not running when that
    work happened — the exact silent gap this command exists to catch. Third

@@ -1,9 +1,17 @@
 {
   "name": "opulent",
   "displayName": "Opulent",
-  "description": "Deterministic model routing: Opus (or optionally Fable) leads as architect and orchestrator; implementation, tests, docs, UI checks, and exploration are delegated to pinned Opus/Sonnet/Haiku contexts. A hook guards the control plane and records what the main loop does — routing steered and auditable, not walled off.",
-  "version": "0.13.0",
-  "author": { "name": "AnalogProblems" },
+  "description": "Deterministic model routing: Opus (or optionally Fable) leads as architect and orchestrator; implementation, tests, docs, UI checks, and exploration are delegated to pinned Opus/Sonnet/Haiku contexts. A hook guards the control plane and records what the main loop does — routing steered and auditable, not walled off. A Codex lane rides beside the Claude ones: OPULENT_CODEX closes the coder ladder and sends implementation to OpenAI Codex, and opulent-codex review puts it on a diff read-only as a second witness, with every cited file:line checked against the tree.",
+  "version": "0.14.0",
+  "author": {
+    "name": "AnalogProblems"
+  },
   "license": "MIT",
-  "keywords": ["model-routing", "usage-limits", "agents", "hooks", "delegation"]
+  "keywords": [
+    "model-routing",
+    "usage-limits",
+    "agents",
+    "hooks",
+    "delegation"
+  ]
 }

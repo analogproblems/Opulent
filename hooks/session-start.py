@@ -107,6 +107,52 @@ ECO_NOTE = ("\n\nEco mode is on for this session (OPULENT_ECO): implementation i
             "`opulent:coder-high` rung, and the routing hook denies `opulent:coder` and "
             "`opulent:coder-max` with a redirect to it. Every other lane is unchanged.")
 
+# The Codex dial (OPULENT_CODEX) swaps the same two pieces eco does, one rung
+# wider and one vendor over: the implementation lane becomes a command rather
+# than an agent, and the ladder paragraph becomes the brief-writing rules that
+# replace rung selection. Rung selection is exactly what stops mattering here —
+# effort is codex's own pin, and the choice the architect still owns is how
+# much context the brief carries.
+CODEX_CODER_LINE = (
+    "- Complex implementation -> `opulent-codex sol` (OpenAI Codex, GPT-5.6, effort max), "
+    "backgrounded. Write a self-contained brief first; codex shares none of this conversation.")
+CODEX_LADDER_PARA = """The coder ladder is closed for this session: `opulent:coder` and its three other rungs
+are denied with a redirect here. Implementation is judged by a model that shares neither this
+vendor nor this conversation, which is the entire reason the dial exists — not cost, and not
+speed.
+
+Two steps, every time, and the first is the one that decides whether the second is worth
+anything. Write a self-contained brief to your scratchpad: the absolute working directory, the
+goal, the constraints, the acceptance checks, and any contract or lens text pasted verbatim.
+Codex cannot ask you a follow-up question and cannot see what you have read, so a brief with a
+hole in it produces a run you cannot verify. Then background the dispatch and relay what it
+prints:
+
+    opulent-codex sol <absolute dir> <brief path>
+
+It blocks, so `run_in_background` is not optional — the harness re-invokes you when it exits.
+Add `--sandbox read-only` for a look-don't-touch run, `--network` only if the work genuinely
+needs it, `--timeout SECS` to bound it. Never assemble a `codex` command yourself: the model,
+effort and sandbox pins live in that script, and a hand-built invocation is one nobody
+configured and nothing logged.
+
+Two lanes sit beside it, and neither is switched on by the dial — you send work there
+deliberately. `opulent-codex terra` is the cheap tier, worth it for bounded batch work where
+what you want is provenance rather than judgment. `opulent-codex review <dir> [--range R]`
+puts codex on a diff read-only as a second witness, builds its own brief, and checks every
+file:line it cites against the tree before you read it; that one is available whether or not
+the dial is thrown.
+
+The brief is the whole job now. A rung was a choice about how hard to think; a brief is a
+choice about what the other model gets to know, and it is the only one of the two you can get
+wrong in a way no retry fixes."""
+CODEX_NOTE = ("\n\nThe Codex lane is on for this session (OPULENT_CODEX): implementation goes to "
+              "`opulent-codex sol` and the routing hook denies all four coder rungs with a "
+              "redirect there. Every other lane — mechanic, test-runner, ui-checker, scribe, "
+              "scout — is unchanged and still Claude: a brief costs more than the work for "
+              "bounded mechanical tasks, and a second vendor buys nothing when running a test "
+              "suite or locating a file.")
+
 
 # Spelled out rather than imported: hooks are standalone scripts, invoked by
 # path, with no package to import a sibling from. Kept identical to
@@ -137,7 +183,18 @@ def _policy():
     it, and the enforcement paragraph corrected when enforcement is not
     actually running."""
     text = CONTEXT
-    if dial("OPULENT_ECO"):
+    # Codex first, and exclusive of eco: eco caps the ladder at one of its own
+    # rungs, and with implementation leaving for another vendor there is no
+    # ladder left to cap. A session with both dials set that applied both would
+    # advertise a redirect to `opulent:coder-high` in the same breath as
+    # denying it.
+    if dial("OPULENT_CODEX"):
+        text = (text.replace(CODER_LINE, CODEX_CODER_LINE)
+                    .replace(LADDER_PARA, CODEX_LADDER_PARA) + CODEX_NOTE)
+        if dial("OPULENT_ECO"):
+            text += (" Eco mode is also set and has nothing to do this session — "
+                     "it caps a ladder that is closed.")
+    elif dial("OPULENT_ECO"):
         text = (text.replace(CODER_LINE, ECO_CODER_LINE)
                     .replace(LADDER_PARA, ECO_LADDER_PARA) + ECO_NOTE)
     if dial("OPULENT_OFF"):
@@ -183,6 +240,7 @@ def _recent_activity():
     always = [("delegations", "delegate"), ("denials", "deny"),
               ("edits", "edit"), ("test runs", "test")]
     when_seen = [("probes", "probe"), ("eco redirects", "eco"),
+                 ("codex redirects", "codex"),
                  ("unparsed commands", "unparsed"), ("removals", "remove")]
     counts = [(name, events.count(key)) for name, key in always]
     counts += [(name, n) for name, n in

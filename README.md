@@ -62,6 +62,8 @@ Here is exactly where your tasks go:
 | **UI verification, console errors** | `opulent:ui-checker` | Sonnet + browser tools |
 | **Documentation (READMEs, ADRs)** | `opulent:scribe` | Opus, Effort: High |
 | **Locating code and structure** | `opulent:scout` | Haiku |
+| **Implementation judged by another vendor** | `opulent-codex sol` | OpenAI Codex, GPT-5.6, Effort: Max |
+| **Second-witness review of a diff** | `opulent-codex review` | OpenAI Codex, read-only |
 
 *A lane whose definition lists no tools (the coder ladder — coder, coder-max, coder-high, coder-lite — and mechanic) inherits all tools.*
 
@@ -78,6 +80,7 @@ Here is exactly where your tasks go:
 Opulent is configured via environment variables. *Note: The hooks read these from the environment Claude Code was launched with — exporting them inside a running session does nothing, and a change takes effect at the next session start.*
 
 * **Eco Mode (`OPULENT_ECO=1`):** Caps the coder ladder at its `opulent:coder-high` rung. It routes both `opulent:coder` and `opulent:coder-max` tasks there (Opus at `high` effort instead of `xhigh` or `max`). The cheaper rungs stay available — voluntarily spending less is never a routing violation. 
+* **Codex Lane (`OPULENT_CODEX=1`):** Closes the coder ladder and sends implementation to OpenAI Codex instead. All four rungs are denied with a redirect to `opulent-codex sol`; every other lane, and the architect, are unchanged — a brief costs more than the work for bounded mechanical tasks, and a second vendor buys nothing when running a test suite or locating a file. Takes precedence over eco mode, which caps a ladder this dial has closed. Requires the `codex` CLI; `opulent-codex review` and `opulent-codex terra` are available whether or not the dial is thrown.
 * **Kill Switch (`OPULENT_OFF=1`):** Disables enforcement entirely for that session.
 * **Custom Logs (`OPULENT_LOG=<path>`):** Redirects the telemetry log from its default location, `~/.claude/opulent-log.jsonl`.
 

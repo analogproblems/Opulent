@@ -415,11 +415,100 @@ if LADDER_PARA in eco_context:
 print("session-start names the eco lane and swaps in the capped ladder "
       "under OPULENT_ECO")
 
+# --- the Codex dial, pinned the way eco is ------------------------------------
+# What OPULENT_CODEX closes, read from the hook rather than retyped. Eco caps
+# two rungs; this one closes the ladder, so every rung registered in agents/ has
+# to be in the tuple. A rung added to the ladder and forgotten here would stay
+# spawnable in a session whose whole point was that implementation happens
+# somewhere else — a silent hole in exactly the routing an operator threw a
+# switch to get.
+CODEX_LANES = constant(routing, "CODEX_LANES", "hooks/route-models.py")
+rungs = {"opulent:" + name for name in AGENTS if name.startswith("coder")}
+if set(CODEX_LANES) != rungs:
+    raise SystemExit(
+        f"hooks/route-models.py: CODEX_LANES is {tuple(sorted(CODEX_LANES))!r} but the "
+        f"ladder registered in agents/ is {tuple(sorted(rungs))!r} — the Codex dial "
+        f"closes the whole ladder or it does not close it")
+for lane in CODEX_LANES:
+    if not lane.startswith("opulent:") or lane[len("opulent:"):] not in AGENTS:
+        raise SystemExit(
+            f"hooks/route-models.py: CODEX_LANES names {lane!r}, which is not an "
+            f"`opulent:`-qualified lane registered in agents/ — the redirect's log "
+            f"detail slices that prefix off and would record a nonsense rung")
+
+# The redirect names a COMMAND, not a lane, so the thing that has to exist is a
+# program. ECO_TWIN's check proves the lane it sends people to is registered;
+# this is the same check one layer down, and it is the one that bites: a lane
+# that is not registered fails loudly at spawn, while a command that is not on
+# PATH fails inside a Bash call the architect made, reading like codex is broken.
+CODEX_COMMAND = constant(routing, "CODEX_COMMAND", "hooks/route-models.py")
+program = CODEX_COMMAND.split()[0]
+binary = os.path.join(REPO, "bin", program)
+if not os.path.isfile(binary):
+    raise SystemExit(
+        f"hooks/route-models.py: CODEX_COMMAND names {program!r}, which is not a "
+        f"file in bin/ — the redirect points at a program this plugin does not ship")
+if not os.access(binary, os.X_OK):
+    raise SystemExit(
+        f"bin/{program}: not executable — plugin bin/ directories are appended to "
+        f"PATH, and a lane the policy names has to be runnable when it gets there")
+print(f"the Codex redirect names a program this plugin ships: bin/{program}")
+
+# The substitutions, checked at the source the way CODER_LINE's are: both are
+# hand-duplicated constants matched by str.replace, so a reworded CONTEXT turns
+# either into a silent no-op.
+CODEX_CODER_LINE = constant(policy_ns, "CODEX_CODER_LINE", "hooks/session-start.py")
+CODEX_LADDER_PARA = constant(policy_ns, "CODEX_LADDER_PARA", "hooks/session-start.py")
+if CODEX_CODER_LINE == CODER_LINE:
+    raise SystemExit(
+        "hooks/session-start.py: CODEX_CODER_LINE is identical to CODER_LINE, so "
+        "throwing the dial changes nothing the session is told")
+for name, text in (("CODEX_CODER_LINE", CODEX_CODER_LINE),
+                   ("CODEX_LADDER_PARA", CODEX_LADDER_PARA)):
+    if program not in text:
+        raise SystemExit(
+            f"hooks/session-start.py: {name} never names {program!r} — the policy "
+            f"the dial swaps in has to say what to run instead of the ladder")
+
+# And end to end, in both directions, for the same reason the eco pair is: the
+# un-swapped ladder paragraph surviving is the live failure, because the session
+# reads "delegate to `opulent:coder`" and finds out by being refused.
+codex = subprocess.run([sys.executable, hook], capture_output=True, text=True,
+                       timeout=30, env=dict(plain_env, OPULENT_CODEX="1"))
+if codex.returncode != 0:
+    print(codex.stderr, file=sys.stderr)
+    raise SystemExit(f"session-start.py exited {codex.returncode} under OPULENT_CODEX")
+codex_context = json.loads(codex.stdout)["hookSpecificOutput"]["additionalContext"]
+codex_lane = lane_line(codex_context, "session-start under OPULENT_CODEX")
+if program not in codex_lane:
+    raise SystemExit(
+        f"session-start: OPULENT_CODEX is set but the implementation lane is still "
+        f"{codex_lane!r}")
+if LADDER_PARA in codex_context:
+    raise SystemExit(
+        "session-start: OPULENT_CODEX is set but the un-swapped LADDER_PARA is still "
+        "in the policy — the session is being taught to spawn rungs the hook denies")
+# Codex wins over eco, and the check is that eco's redirect target is not being
+# advertised: a session with both dials set that ran both substitutions would
+# name `opulent:coder-high` as the lane and deny it in the same breath.
+both = subprocess.run([sys.executable, hook], capture_output=True, text=True,
+                      timeout=30,
+                      env=dict(plain_env, OPULENT_CODEX="1", OPULENT_ECO="1"))
+both_lane = lane_line(json.loads(both.stdout)["hookSpecificOutput"]["additionalContext"],
+                      "session-start under both dials")
+if program not in both_lane:
+    raise SystemExit(
+        f"session-start: both dials are set but the implementation lane is "
+        f"{both_lane!r} — Codex takes precedence, because eco caps a ladder that "
+        f"the Codex dial has closed")
+print("session-start closes the ladder and names the Codex lane under OPULENT_CODEX")
+
 # Telemetry vocabulary: the session opens with a summary of the routing log,
 # and an event type it cannot count is a lane change nobody can audit.
 with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
     fh.write('{"t": "2026-08-06T00:00:00+00:00", "event": "delegate", "detail": "opulent:coder-high"}\n')
     fh.write('{"t": "2026-08-06T00:00:01+00:00", "event": "eco", "detail": "eco:coder"}\n')
+    fh.write('{"t": "2026-08-06T00:00:02+00:00", "event": "codex", "detail": "codex:coder"}\n')
     telemetry_log = fh.name
 try:
     telem = subprocess.run([sys.executable, hook], capture_output=True, text=True,
@@ -427,6 +516,11 @@ try:
     summary = json.loads(telem.stdout)["hookSpecificOutput"]["additionalContext"]
 finally:
     os.unlink(telemetry_log)
+if "1 codex redirects" not in summary:
+    raise SystemExit(
+        "session-start: a `codex` event in the routing log is not reported in the "
+        "activity line — a dial whose redirects cannot be counted is a lane change "
+        "nobody can audit")
 if "1 eco redirects" not in summary:
     raise SystemExit(
         "session-start: an `eco` event in the routing log is not reported in the "

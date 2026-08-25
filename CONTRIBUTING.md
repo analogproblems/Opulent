@@ -16,6 +16,7 @@ valid and welcome PR.
 ```
 python3 tests/hook_selftest.py                      # routing hook payload cases (~260, one subprocess each)
 python3 tests/ci_checks.py                          # marketplace manifests + session-start JSON
+python3 tests/codex_cases.py                        # the Codex lane: argv, exit codes, ledger, citations
 python3 tests/gate_selftest.py                      # the gate finds planted terms, and never prints them
 python3 tests/gate_corpus_selftest.py               # the gate's corpus sees every blind-spot plant
 python3 tests/public_gate.py                        # no private residue in the object database
