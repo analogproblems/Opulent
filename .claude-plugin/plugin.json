@@ -2,7 +2,7 @@
   "name": "opulent",
   "displayName": "Opulent",
   "description": "Deterministic model routing: Opus (or optionally Fable) leads as architect and orchestrator; implementation, tests, docs, UI checks, and exploration are delegated to pinned Opus/Sonnet/Haiku contexts. A hook guards the control plane and records what the main loop does — routing steered and auditable, not walled off.",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "author": { "name": "AnalogProblems" },
   "license": "MIT",
   "keywords": ["model-routing", "usage-limits", "agents", "hooks", "delegation"]

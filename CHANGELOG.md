@@ -10,6 +10,50 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.12.1 — 2026-08-24
+
+**The ladder priced escalation wrong.** Every cue that taught rung
+selection costed over-effort in tokens and nothing else — `coder-max`
+was for "work where an error costs far more than the extra tokens",
+`coder-high` for where "xhigh's depth isn't earning its tokens" — and
+nowhere in the plugin did any text say a rung above the work returns
+worse code. Under those stated rules escalating is the rational move:
+under-reaching is visible and wrong in front of the user, over-reaching
+costs only money the user already agreed to spend. So the architect
+reached for max by reflex, which is the failure 0.12.0 built the ladder
+to avoid. Escalation is now priced as a quality risk, in the agent
+descriptions, the session policy, and the README: effort a rung cannot
+spend on the problem it spends on structure the problem never needed.
+
+**The criteria are facts now, not adjectives.** "Correctness-critical",
+"solid work", "deep exploration" are unfalsifiable from inside the
+moment before writing a spec, where everything feels correctness-
+critical. The ladder paragraph asks three questions answerable from the
+spec itself — can you name every file the change touches, would an
+existing test or typecheck catch a wrong answer, does it touch a named
+hazard (concurrency, auth or crypto, a data migration, money, a public
+contract) — and maps the answers onto rungs. `coder-max` requires one of
+exactly two facts, to be named in the brief: a hazard in scope, or a
+lower rung that already failed review or tests. Feeling hard is not a
+hazard.
+
+**Pick the rung after writing the spec.** The old guidance was applied
+while the task was still fuzzy, and fuzziness reads as complexity; the
+three questions have no answers until the spec exists. The paragraph now
+says so in its first sentence.
+
+**The shared charter says what the extra effort is for.** All four rungs
+carry one body and none of them explained what a higher rung buys, so
+"more effort" was free to become "more change". Every rung now briefs
+that effort buys depth of verification — more surrounding code read,
+more edge cases considered, harder self-checking — and never extra
+abstraction, extra configurability, or an unasked-for refactor: a change
+larger than its spec is a defect, not thoroughness.
+
+Eco mode's capped paragraph carries the same repricing, since the
+lite/high choice it still leaves open is exactly the one this release is
+about. No behavior change in the routing hook, no new denial path.
+
 ## opulent 0.12.0 — 2026-08-22
 
 **The coder lane becomes a ladder.** One effort rung per lane was a

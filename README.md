@@ -54,9 +54,9 @@ Here is exactly where your tasks go:
 | :--- | :--- | :--- |
 | **Architecture, review, orchestration** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 or Fable) |
 | **Complex implementation (default rung)** | `opulent:coder` | Opus, Effort: xHigh |
-| **Correctness-critical implementation** | `opulent:coder-max` | Opus, Effort: Max |
-| **Standard implementation** | `opulent:coder-high` | Opus, Effort: High |
-| **Bounded, well-specified implementation** | `opulent:coder-lite` | Opus, Effort: Medium |
+| **Named hazard, or a failed lower rung** | `opulent:coder-max` | Opus, Effort: Max |
+| **A few known files, no hazard** | `opulent:coder-high` | Opus, Effort: High |
+| **Every file named, a check would catch it** | `opulent:coder-lite` | Opus, Effort: Medium |
 | **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet |
 | **Tests, builds, linters** | `opulent:test-runner` | Sonnet (no edit tools) |
 | **UI verification, console errors** | `opulent:ui-checker` | Sonnet + browser tools |
@@ -65,7 +65,9 @@ Here is exactly where your tasks go:
 
 *A lane whose definition lists no tools (the coder ladder — coder, coder-max, coder-high, coder-lite — and mechanic) inherits all tools.*
 
-**The coder lane is a ladder.** Its four rungs share one charter and differ only in effort: `opulent:coder` at `xhigh` is the default — Anthropic's recommended setting for coding — with `opulent:coder-max` for work where correctness matters more than cost, `opulent:coder-high` at Anthropic's documented sweet spot for quality against token efficiency (where `xhigh`'s extra depth isn't earning its tokens), and `opulent:coder-lite` for bounded, well-specified changes. Misroutes are cheap to fix: if a rung's output fails review or tests, resubmit one rung up.
+**The coder lane is a ladder.** Its four rungs share one charter and differ only in effort: `opulent:coder` at `xhigh` is the default — Anthropic's recommended setting for coding — with `opulent:coder-high` at Anthropic's documented sweet spot for quality against token efficiency, `opulent:coder-lite` for changes whose every file the spec already names, and `opulent:coder-max` reserved for a named hazard (concurrency, auth or crypto, a data migration, money, a public contract) or a lower rung that already failed review or tests.
+
+**The rung is picked from the spec, not from the mood.** Three questions answer it — can you name every file the change touches, would an existing check catch a wrong answer, is a named hazard in scope? — and they are answerable only once the spec exists, which is why the ladder asks you to write it first. Escalation is priced as a quality risk rather than a bill, because that is what it is: a rung above the work returns *worse* code, not safer code, since the effort it cannot spend on the problem it spends on structure the problem never needed. Guidance that only ever priced over-effort in tokens made max the rational reflex, and the reflex is the failure mode. Under-reaching, by contrast, is visible and cheap to undo — if a rung's output fails review or tests, resubmit one rung up.
 
 *Note: You can manually escalate problems Opus can't crack to Fable in its own separate session. You can also run Fable in the Architect seat if you have access!*
 

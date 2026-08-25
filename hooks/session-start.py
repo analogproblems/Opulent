@@ -11,19 +11,31 @@ import os
 # looked like the text in CONTEXT would substitute nothing the day the two
 # drifted apart. CODER_LINE below is the older, hand-matched form of the same
 # trick — which is why CI checks that it still matches.
-LADDER_PARA = """The coder lane is a ladder — one charter, four effort rungs. Default to `opulent:coder`
-(xhigh). Escalate to `opulent:coder-max` (max) only on a named signal: correctness-critical
-code (concurrency, security-sensitive paths, data migrations) or a lower rung's attempt failed
-review or tests. Drop to `opulent:coder-high` (high) for solid work where xhigh's depth isn't
-earning its tokens, or to `opulent:coder-lite` (medium) for bounded, well-specified work that
-needs Opus judgment but not deep exploration. When unsure, take the default rung — a misroute
-self-corrects: if a rung's output fails verification, resubmit one rung up."""
+LADDER_PARA = """The coder lane is a ladder — one charter, four effort rungs. Pick the rung AFTER you have
+written the spec, from what the spec says, not from how the task felt before you wrote it. A rung
+above the work does not merely cost more — it returns WORSE code, because the effort it cannot
+spend on the problem it spends on structure the problem never needed. Under-reaching is visible
+and recoverable; over-reaching is neither, which is why the reflex to escalate is the one to
+distrust.
+
+Three questions decide the rung, and all three are answerable from the spec in front of you.
+Can you name every file the change touches? Would an existing test, typecheck or lint catch a
+wrong answer? Does it touch a named hazard — concurrency, auth or crypto, a data migration,
+money, or a public contract others depend on?
+
+- All three favourable (every file named, a check catches it, no hazard) -> `opulent:coder-lite` (medium).
+- A few known files, no hazard, an answer that needs reading to find but whose shape is clear -> `opulent:coder-high` (high).
+- Files you cannot all name up front, or finding the right change is itself part of the job -> `opulent:coder` (xhigh) — the default when none of the others clearly fits.
+- A named hazard in scope, OR a lower rung already attempted this task and failed review or tests -> `opulent:coder-max` (max). Name which of the two in the brief; feeling hard is not a hazard, and neither is caring about the outcome.
+
+A misroute self-corrects: if a rung's output fails verification, resubmit one rung up. That
+recovery is cheap and it is the reason the ladder is safe to descend."""
 
 CONTEXT = """# Model routing policy (opulent plugin)
 
 The main conversation is the architect/orchestrator only. Delegate execution:
 
-- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh). Give it a full spec: files, approach, constraints.
+- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh) — the ladder's default rung, not its only one; pick from the ladder below. Give it a full spec: files, approach, constraints.
 - Routine/mechanical edits -> `opulent:mechanic` agent (Sonnet). Give exact instructions.
 - Tests, builds, linters, typechecks -> `opulent:test-runner` agent (Sonnet). Delegate anything beyond a quick one-off check.
 - Visual/UI verification (screenshots, rendered pages, console errors) -> `opulent:ui-checker` agent (Sonnet).
@@ -76,14 +88,21 @@ the user take it to a stronger model in a dedicated session - do not burn the bu
 # — and the ladder paragraph for the capped version of itself. Two
 # substitutions rather than a second copy of the policy — two copies of this
 # text would drift, and only one of them would be the one anyone reads.
-CODER_LINE = ("- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh). "
+CODER_LINE = ("- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh) — "
+              "the ladder's default rung, not its only one; pick from the ladder below. "
               "Give it a full spec: files, approach, constraints.")
 ECO_CODER_LINE = ("- Complex implementation -> `opulent:coder-high` agent (Opus, effort high "
-                  "— eco cap). Give it a full spec: files, approach, constraints.")
+                  "— eco cap; the ladder is capped here and `opulent:coder-lite` stays open). "
+                  "Give it a full spec: files, approach, constraints.")
 ECO_LADDER_PARA = (
     "Eco mode caps the coder ladder: `opulent:coder` and `opulent:coder-max` are denied with a\n"
     "redirect to `opulent:coder-high` (high). The cheaper rungs stay available — voluntarily\n"
-    "spending less is never a routing violation.")
+    "spending less is never a routing violation, and it is often the more accurate call: a rung\n"
+    "above the work returns worse code, not safer code, because the effort it cannot spend on\n"
+    "the problem it spends on structure the problem never needed. So still drop to\n"
+    "`opulent:coder-lite` (medium) when the spec names every file the change touches, an existing\n"
+    "test or typecheck would catch a wrong answer, and no named hazard — concurrency, auth or\n"
+    "crypto, a data migration, money, a public contract — is in scope.")
 ECO_NOTE = ("\n\nEco mode is on for this session (OPULENT_ECO): implementation is capped at the "
             "`opulent:coder-high` rung, and the routing hook denies `opulent:coder` and "
             "`opulent:coder-max` with a redirect to it. Every other lane is unchanged.")
