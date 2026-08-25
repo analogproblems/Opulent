@@ -6,7 +6,7 @@ was written, and the stored list below hunted its internals — the matcher
 constants, the escape-hatch variables, the file paths they lived at, and its
 release prose. Every one of those is published today in lens-library's own
 public repo, under lens-library's own name, so the list they justified is
-empty as of 0.12.1.
+empty as of 0.13.0.
 
 What is left is the machinery, which was never about that plugin. A working
 tree can be cleaned in an afternoon; a history keeps every draft of it
@@ -75,7 +75,7 @@ from collections import namedtuple
 #          redaction below reads.
 Term = namedtuple("Term", "text leak label secret", defaults=(None, False))
 
-# Empty as of 0.12.1, and empty on purpose rather than by neglect. Every term
+# Empty as of 0.13.0, and empty on purpose rather than by neglect. Every term
 # this list held named an internal of the companion plugin — its matcher
 # constants, its danger-hook escape hatch, the filenames they lived in, the
 # shared-repo paths from before the split, its release-note headings — and all

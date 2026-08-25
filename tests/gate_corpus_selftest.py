@@ -17,7 +17,7 @@ control at all — emptying the whole list left the suite green, because a clean
 repo scans clean whether matching works or not. `stored term in an ordinary
 commit` is that control.
 
-Since 0.12.1 it plants a term of its own invention into a COPY of the gate
+Since 0.13.0 it plants a term of its own invention into a COPY of the gate
 rather than harvesting a real one, because the real list is empty: every term
 it held named an internal of the companion plugin, and the companion is public
 now. Harvesting was only ever how these cases got hold of a denied string

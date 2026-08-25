@@ -10,7 +10,7 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
-## opulent 0.12.1 — 2026-08-24
+## opulent 0.13.0 — 2026-08-24
 
 **The ladder priced escalation wrong.** Every cue that taught rung
 selection costed over-effort in tokens and nothing else — `coder-max`
