@@ -10,6 +10,70 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.16.0 — 2026-09-01
+
+**Documentation stops being a lane.** `opulent:scribe` is removed, and the
+architect writes its own docs. This is the second cut of its kind and it has
+the same reason behind it as the first: the model that made the design
+decisions is the only one that can say why they went this way rather than the
+other. A lane briefed on the outcome produces prose that accurately describes
+what the code does while quietly losing why it does it — and "why" is the only
+part of a document that the code could not have told you itself.
+
+The lane's quality gate moves into the policy rather than dying with it:
+summarize the doc, then summarize the summary, and if the core point does not
+survive two generations, restructure until it does. Grounding every claim in
+the code, and keeping every command and path copy-pasteable, move across the
+same way. Those were the best of the scribe charter, and deleting the lane
+without rehoming them would have deleted the discipline along with the
+executor.
+
+The charter's other gate did not make the move. It asked for a reread as a
+busy reader who sees only the first line of each paragraph and section — and
+run against this changelog it passes, which is precisely the problem. It
+passes because the prose was written to pass, and what a first-lines-only
+reader takes away from an entry is every claim and not one reason. A file
+whose whole job is to say *why* cannot be tuned for a reader who skips the
+why. The gate also rewards bolding the opening words of every paragraph until
+emphasis stops meaning anything, and it fights the payoff-last sentences this
+repo's prose actually leans on. What was load-bearing in it — do not bury the
+point — the Telephone Game already catches, from the clarity side rather than
+the layout side.
+
+Trivial doc edits stay delegated. A typo, a stale path, a version bump — those
+are mechanical whatever file they land in, and `opulent:mechanic` still takes
+them. The line is not "documents are special", it is that explaining a design
+is part of making it.
+
+**Four lanes left**, and the shape is finally legible: two Opus coder lanes
+split by hazard, two Sonnet support lanes for edits and verification, search
+delegated to a built-in agent, and everything requiring the architect's own
+judgment — design, orchestration, documentation, seeing the UI — kept where
+that judgment lives.
+
+**Fully decoupled from the lens plugin.** That plugin is being retired, and
+this release cuts the last threads to it. The release ritual is the one that
+mattered: tagging here required running the companion's lane drift guard
+first, so a lane added or removed in this repo could not ship until another
+repo's file agreed. Removing `opulent:scribe` tripped exactly that wire — the
+guard failed on an exemption whose subject no longer existed — which is a
+release blocked by a dependency that was never supposed to exist. The guard is
+gone from CONTRIBUTING, and a design constraint replaces it: no tag may wait on
+another repo's CI.
+
+The doctor loses its companion probe, step 6, which asked users to test a
+second plugin's danger hook from inside this one's health check. The live e2e
+tier's description is corrected while we are here — it claimed to run by manual
+dispatch from a private companion's CI, which had not been true since that repo
+went public; a maintainer runs it by hand, and that is now what it says. The
+public gate's stored denylist was already empty and stays empty; only its
+explanation is reworded, so nothing there reads as a live dependency.
+
+The delegation bridge keeps its principle and drops its vocabulary. Contracts
+still have to be pasted into briefs verbatim, because instructions do not cross
+the agent boundary on their own — but the examples no longer name lenses and
+oaths, since those were another plugin's words for it.
+
 ## opulent 0.15.0 — 2026-09-01
 
 **The matrix collapses to what it was always for.** Four coder rungs, three

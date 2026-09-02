@@ -14,8 +14,8 @@ jobs:
   # needs credentials either — the hooks are self-contained Python and the gate
   # only reads git, so a throwaway VM is not a compromise but the right home.
   # The live end-to-end tier does need an authenticated claude CLI, so it is not
-  # part of this repo's CI at all: it runs from the private companion's CI, by
-  # manual dispatch, against a checkout of this repo's main.
+  # part of this repo's CI at all: a maintainer runs it by hand from a local
+  # checkout before a release.
   selftests:
     name: Hook self-tests + public hygiene
     runs-on: ubuntu-latest

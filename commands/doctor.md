@@ -12,12 +12,12 @@ failed.
    copy under `~/.claude/plugins/` and flag the anomaly.
 
 2. **Agents registered.** From your own available-agents list: are
-   `opulent:coder`, `opulent:coder-max`, `opulent:mechanic`,
-   `opulent:test-runner`, and `opulent:scribe` present? Name any that are
-   missing. (Implementation is a binary choice between the two coder lanes;
-   there is no third. Exploration uses the built-in `Explore` agent and visual
-   verification stays in the main loop — neither is an Opulent lane, and
-   neither needs a check here.)
+   `opulent:coder`, `opulent:coder-max`, `opulent:mechanic`, and
+   `opulent:test-runner` present? Name any that are missing. (Implementation is
+   a binary choice between the two coder lanes; there is no third. Exploration
+   uses the built-in `Explore` agent, and documentation and visual verification
+   both stay in the main loop — none of those is an Opulent lane, and none
+   needs a check here.)
 
 3. **Policy injected.** Is the "Model routing policy (opulent plugin)" text
    present in your current session context? Yes means the SessionStart hook
@@ -59,15 +59,6 @@ failed.
    a read-only mount) and telemetry is being silently discarded — the same
    silent gap wearing a different face. A high `edit` count is not a fault:
    it is the main loop working with the record intact.
-
-6. **Companion probe.** If you also run the lens-library plugin — skip on
-   sight otherwise — and only when its agents are registered AND
-   `git remote` prints something (a dry run still contacts the remote and
-   can hang on a credential prompt, so a remoteless repo skips too): run
-   `git push --dry-run`. Denied with a Secret Keeper message → danger hook
-   live (that denial logs as verdict `probe` in the danger log, keeping its
-   denial count honest too). If it executes, it was a dry run — harmless —
-   report the danger hook as not live.
 
 Verdict, one line: **LIVE** · **PARTIAL** (say which half works) · **DEAD**
 (installed but not enforcing — recommend checking the plugin's enable state

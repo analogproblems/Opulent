@@ -1,8 +1,8 @@
 {
   "name": "opulent",
   "displayName": "Opulent",
-  "description": "Deterministic model routing: Opus (or optionally Fable) leads as architect and orchestrator; implementation, tests, and documentation are delegated to pinned Opus and Sonnet contexts, while search goes to Claude Code's built-in Explore agent and UI verification stays with the architect that designed it. Implementation is a binary choice — xhigh by default, max only for a named hazard. A hook guards the control plane and records what the main loop does — routing steered and auditable, not walled off.",
-  "version": "0.15.0",
+  "description": "Deterministic model routing: Opus (or optionally Fable) leads as architect and orchestrator; implementation and verification are delegated to pinned Opus and Sonnet contexts, and search goes to Claude Code's built-in Explore agent — while documentation and UI verification stay with the architect that made the design decisions. Implementation is a binary choice: xhigh by default, max only for a named hazard. A hook guards the control plane and records what the main loop does — routing steered and auditable, not walled off.",
+  "version": "0.16.0",
   "author": {
     "name": "AnalogProblems"
   },

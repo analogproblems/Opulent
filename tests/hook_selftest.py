@@ -544,13 +544,13 @@ CASES = [
     # --- the ladder is two lanes now, and both spawn freely ---
     ("main Task->coder-max",         task("opulent:coder-max"),                         "allow"),
     ("main Task->mechanic",          task("opulent:mechanic"),                          "allow"),
-    ("main Task->scribe",            task("opulent:scribe"),                            "allow"),
     ("main Task->test-runner",       task("opulent:test-runner"),                       "allow"),
-    # Lanes retired in 0.15.0 are not special-cased: an unregistered opulent:*
-    # name is an ordinary delegation the harness will reject on its own, and
-    # the hook inventing a denial for it would be a second source of truth.
+    # Retired lanes are not special-cased: an unregistered opulent:* name is an
+    # ordinary delegation the harness will reject on its own, and the hook
+    # inventing a denial for it would be a second source of truth.
     ("main Task->retired scout",     task("opulent:scout"),                             "allow"),
     ("main Task->retired ui-checker", task("opulent:ui-checker"),                       "allow"),
+    ("main Task->retired scribe",    task("opulent:scribe"),                            "allow"),
     # --- reads, garbage ---
     ("main Read tool",               {"tool_name": "Read",
                                       "tool_input": {"file_path": PROJ}},              "allow"),

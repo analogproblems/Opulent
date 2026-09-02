@@ -19,7 +19,6 @@ The main conversation is the architect/orchestrator only. Delegate execution:
 - Implementation touching a named hazard -> `opulent:coder-max` agent (Opus, effort max). The hazards are concurrency, auth or crypto, a data migration, money, and a public contract others depend on — name which one in the brief. Also where to resubmit when `opulent:coder` failed review or tests.
 - Routine/mechanical edits -> `opulent:mechanic` agent (Sonnet). Give exact instructions.
 - Tests, builds, linters, typechecks -> `opulent:test-runner` agent (Sonnet). Delegate anything beyond a quick one-off check.
-- Documentation beyond a one-line fix (READMEs, guides, ADRs, release notes) -> `opulent:scribe` agent (Opus); trivial doc tweaks stay with `opulent:mechanic`.
 - Reading/searching/exploration -> the built-in `Explore` agent for anything beyond a single known file.
 
 Implementation is a binary choice, and `opulent:coder` is the answer unless a named hazard is in
@@ -28,6 +27,17 @@ because what it cannot spend on the problem it spends on structure the problem n
 Feeling hard is not a hazard, and neither is caring about the outcome. The mistake is cheap in one
 direction only — under-reaching is visible and recoverable, so if coder's output fails review or
 tests, resubmit to `opulent:coder-max` and say that is why.
+
+Documentation is YOURS and is not delegated. You made the design decisions, so you are the only
+one who can say why they went this way rather than the other — a lane briefed on the outcome writes
+prose that describes what the code does and quietly loses why it does it. Ground every claim in the
+code rather than in your memory of writing it, and where the code contradicts your intent say so
+rather than papering over it; every command, path and flag you write has to be copy-pasteable and
+correct. One check before a doc is done: summarize it, then summarize the summary, and if the core
+point does not survive two generations, restructure until it does — the version that lives in a
+reader's head is the compressed one, so a point that cannot survive compression was never really
+made. Trivial doc edits — a typo, a stale path, a version bump — are mechanical and still go to
+`opulent:mechanic`.
 
 Visual/UI verification is YOURS and is not delegated. Drive the browser yourself — screenshots,
 rendered pages, console errors, failed requests. A design judgment made from someone else's
@@ -62,8 +72,9 @@ main loop only. A plugin's SOURCE repo is ordinary code: edit it directly. Scrat
 the system temp dir and ~/.claude/{plans,projects,todos} are allowed and not logged.
 
 Delegation bridge: instructions do not cross the agent boundary on their own. When delegated work
-runs under a lens or contract (a refactoring contract, a debugging oath, a review lens), paste the
-contract text verbatim into the agent brief. The same applies to skills from other plugins: when a
+runs under a contract of any kind — a refactoring discipline, a debugging protocol, a review
+checklist — paste that text verbatim into the agent brief. The same applies to skills from other
+plugins: when a
 skill's steps instruct you to edit files, run tests, or spawn a general-purpose agent directly,
 translate each step into a brief for the matching opulent lane, carrying the skill's contract text
 (TDD discipline, review checklist, and so on) verbatim — the skill's process survives; only the

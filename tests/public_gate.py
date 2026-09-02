@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Public-hygiene gate: scans the whole object database for private residue.
 
-The companion plugin is public. It shipped from a private repo when this gate
-was written, and the stored list below hunted its internals — the matcher
-constants, the escape-hatch variables, the file paths they lived at, and its
-release prose. Every one of those is published today in lens-library's own
-public repo, under lens-library's own name, so the list they justified is
-empty as of 0.13.0.
+This repo once shared a home with a lens plugin, and the stored list below
+hunted that plugin's internals — the matcher constants, the escape-hatch
+variables, the file paths they lived at, and its release prose. That plugin
+was published under its own name in 2026-08, so the list they justified went
+empty as of 0.13.0, and it stays empty: a term is not secret once its subject
+ships in public.
 
 What is left is the machinery, which was never about that plugin. A working
 tree can be cleaned in an afternoon; a history keeps every draft of it
@@ -76,10 +76,10 @@ from collections import namedtuple
 Term = namedtuple("Term", "text leak label secret", defaults=(None, False))
 
 # Empty as of 0.13.0, and empty on purpose rather than by neglect. Every term
-# this list held named an internal of the companion plugin — its matcher
-# constants, its danger-hook escape hatch, the filenames they lived in, the
-# shared-repo paths from before the split, its release-note headings — and all
-# of them ship publicly today in lens-library's own repo. A denylist entry
+# this list held named an internal of the lens plugin this repo used to share a
+# home with — its matcher constants, its danger-hook escape hatch, the
+# filenames they lived in, the shared-repo paths from before the split, its
+# release-note headings — and every one of them was published. A denylist entry
 # whose subject is published is worse than no entry at all: it fails a gate
 # nobody can satisfy, and it teaches the next reader that a public name is a
 # secret one.
@@ -92,8 +92,9 @@ DENY = []
 
 # Tag names are matched as globs rather than substrings, because the residue
 # this path exists for is a naming convention rather than a word. Empty for the
-# same reason the list above is: its one glob covered the companion's pre-split
-# release tags, those releases are public now, and no tag here matches it.
+# same reason the list above is: its one glob covered the pre-split release
+# tags of the plugin that used to live here, those releases went public, and no
+# tag in this repo matches it.
 DENY_TAGS = []
 
 # This file names every term it hunts for, so scanning it would flag it — the

@@ -34,8 +34,8 @@ pull request, on GitHub-hosted runners — which is the whole of this repo's CI,
 because no self-hosted runner serves a public repository. The live end-to-end
 tier (`tests/e2e_smoke.py`) drives real throwaway Claude sessions against an
 authenticated `claude` CLI, and that CLI lives on a personal machine, so the
-tier is not part of this repo's CI at all: the private companion repo runs it
-by manual dispatch, from a checkout of our main. The scripts stay here, beside
+tier is not part of any CI: a maintainer runs it by hand from a local
+checkout before a release. The scripts stay here, beside
 the thing they test — run them yourself if you have an authenticated CLI.
 Nothing you can open a PR against needs them.
 
@@ -46,19 +46,6 @@ marketplace update detection — a version-less change never reaches installed
 users), add a CHANGELOG entry that says *why*, and tag with
 `claude plugin tag <path> --push` (`{plugin}--v{version}`).
 
-Adding or renaming an implementation lane (an unrestricted-tools agent)?
-lens-library's IMPL_LANES must learn it in the same release window — and
-don't learn that from lens-library's CI after you push. Run its drift guard
-against your working tree before tagging:
-
-    OPULENT_REPO=. python3 /path/to/lens-library/tests/lane_drift_guard.py
-
-A clean run means every write-capable lane here is known to the bridge; a
-failure names exactly the lanes to add. The 0.12.0 coder ladder shipped
-without this step and was caught downstream by the companion's CI (then
-still named lens-master, at its 1.24.1) — the guard works either way, but
-upstream it costs one command instead of a release.
-
 ## Design constraints worth knowing before you propose things
 
 - **Fail-open is sacred.** A hook that can brick a session on a parse error
@@ -68,8 +55,12 @@ upstream it costs one command instead of a release.
 - **Enforcement is a seatbelt, not a wall** — see the README's "Enforcement
   & Honesty" section. PRs that chase perfect enforcement by
   blocking ever-more Bash will lose to the ergonomics they cost.
-- **The plugins must stay independently installable.** opulent must not
-  require lens-library, or vice versa.
+- **Opulent stands alone.** There is no companion plugin and it must not grow
+  one. Every check a release needs lives in this tree, every lane it routes to
+  is defined here, and no tag may wait on another repo's CI. It shared a repo
+  with a lens plugin until 2026-08-09 and a release ritual with it until
+  0.16.0; both are gone, and re-coupling is the thing this rule exists to
+  refuse.
 - **Prompts are code.** Agent definitions carry contracts (coverage-first
   reporting, no-edit-tools test-runner); dilute them and the tests won't
   catch it, but a fresh-context review will.

@@ -19,8 +19,8 @@ commit` is that control.
 
 Since 0.13.0 it plants a term of its own invention into a COPY of the gate
 rather than harvesting a real one, because the real list is empty: every term
-it held named an internal of the companion plugin, and the companion is public
-now. Harvesting was only ever how these cases got hold of a denied string
+it held named an internal of the lens plugin this repo used to share a home
+with, and all of them were published. Harvesting was only ever how these cases got hold of a denied string
 without writing one down; the property under test is that the stored-term path
 and the tag path are wired at all. A synthetic entry proves that whether or
 not a real secret happens to exist, which is the right coupling — a suite that
