@@ -10,6 +10,84 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.15.0 — 2026-09-01
+
+**The matrix collapses to what it was always for.** Four coder rungs, three
+session dials, a Haiku scout and a second vendor's lane came off in one pass.
+What is left is five agents, one knob, and a routing decision the architect can
+make without consulting a table.
+
+**Implementation is a binary choice.** `opulent:coder` at xhigh is the answer;
+`opulent:coder-max` is for a named hazard — concurrency, auth or crypto, a data
+migration, money, a public contract — or a resubmission after coder failed
+review or tests. `coder-high` and `coder-lite` are gone. The ladder was built
+to price effort accurately, and it did, but pricing it accurately turned out to
+cost a three-question interview before every delegation. The two rungs that
+survive are the two that answer different questions; the middle rungs only ever
+answered "how confident am I", which is not a routing question.
+
+**`OPULENT_ECO`, `OPULENT_CODEX` and `OPULENT_OFF` are removed.** Setting them
+now does nothing. Eco capped a ladder that no longer has a middle; Codex sent
+implementation to another vendor, which was interesting and is not what this
+plugin is; and `OPULENT_OFF` disabled every denial for a whole session, which
+is a large silent hole to carry for a seatbelt. `OPULENT_LOG` stays — it is the
+only dial that changes where a record goes rather than whether one exists.
+
+Each dial cost more than its own branch. Eco and Codex each carried a duplicate
+implementation-lane line and a duplicate ladder paragraph in session-start,
+swapped in by `str.replace`, plus the CI checks that existed solely to catch
+those substitutions silently matching nothing. With the dials gone the policy is
+one string with no seams, and the checks that guarded the seams went with them.
+
+**The Codex lane is gone entirely** — `bin/opulent-codex`, `/opulent:codex`,
+`/opulent:review`, and its case suite. `sol`, `terra` and `review` worked, and
+`review`'s habit of verifying every `file:line` it cited was worth having. It
+leaves because a routing plugin that also vendors a second vendor's CLI is two
+plugins wearing one manifest, not because the lane was bad. `/opulent:review`
+goes with it rather than being rebuilt on a Claude lane: a second witness that
+shares your vendor, your conversation and your assumptions is not a second
+witness, and `/code-review` already covers the same-vendor case.
+
+**Exploration goes to the built-in `Explore` agent** and `opulent:scout` is
+gone, which takes Haiku out of the matrix. The hook used to deny `Explore` and
+redirect to scout; it now allows it. Scout was a locate-only lane wrapped around
+a model Claude Code already dispatches for exactly that job, and the wrapper's
+one real contribution — "report WHERE, never WHY" — was a rule the architect
+has to apply to any search result regardless of who ran it.
+
+**`opulent:ui-checker` is gone, and UI verification stays in the main loop.**
+This is the one removal that is not simplification for its own sake. A design
+judgment made from another model's description of a screenshot is a design
+judgment made blind; the model that decided how an interface should look is the
+one that has to see whether it does. The policy now says so in as many words,
+because a lane that merely disappears reads as an oversight and invites the
+architect to reach for a catch-all instead.
+
+**Sonnet lanes run at xhigh.** `opulent:mechanic` and `opulent:test-runner`
+move from high. With the cheap coder rungs gone there is no longer a tier below
+them to fall through to, and a mechanical edit returned wrong is not cheaper
+than one returned slowly.
+
+**The delegation bridge learns about Workflow.** `ultracode` and any other
+multi-agent fan-out reaches the plugin through a hole nothing can close: a
+`Workflow` call is not a `Task` or `Agent` call, so the routing hook never sees
+it, and the agents its script spawns are exempt the way every subagent is. The
+policy now tells the architect to set `opts.agentType` on each `agent()` call,
+and to state `opts.model` and `opts.effort` rather than trust a lane's own pins
+to cross that boundary unstated — the tool's documentation says an omitted
+model inherits the session's, and does not say what happens when `agentType`
+already names a lane that pins one, so the guidance is written to be right
+either way. Without it a fan-out inherits the session model uniformly, which
+runs `opulent:mechanic` and `opulent:test-runner` at Opus or Fable rates: not a
+weaker version of the routing, but its exact inverse. CI now fails if the
+paragraph goes missing, since nothing else would notice.
+
+**CI keeps the removals removed.** A new check runs session-start with all
+three retired dials exported and fails if the policy changes or if it so much
+as mentions one of them; another fails any agent pinning a model outside the
+Opus/Sonnet pair, so a Haiku lane cannot quietly return as a third tier nothing
+documents.
+
 ## opulent 0.14.0 — 2026-08-24
 
 **A Codex lane, folded in from orrery.** `bin/opulent-codex` runs one pinned

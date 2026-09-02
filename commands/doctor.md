@@ -12,11 +12,12 @@ failed.
    copy under `~/.claude/plugins/` and flag the anomaly.
 
 2. **Agents registered.** From your own available-agents list: are
-   `opulent:coder`, `opulent:coder-max`, `opulent:coder-high`,
-   `opulent:coder-lite`, `opulent:mechanic`, `opulent:test-runner`,
-   `opulent:ui-checker`, `opulent:scribe`, and `opulent:scout` present? Name
-   any that are missing. (The four coder rungs are one ladder; eco mode caps
-   it at `opulent:coder-high`, checked in step 4.)
+   `opulent:coder`, `opulent:coder-max`, `opulent:mechanic`,
+   `opulent:test-runner`, and `opulent:scribe` present? Name any that are
+   missing. (Implementation is a binary choice between the two coder lanes;
+   there is no third. Exploration uses the built-in `Explore` agent and visual
+   verification stays in the main loop — neither is an Opulent lane, and
+   neither needs a check here.)
 
 3. **Policy injected.** Is the "Model routing policy (opulent plugin)" text
    present in your current session context? Yes means the SessionStart hook
@@ -25,65 +26,31 @@ failed.
 4. **Enforcement liveness — the decisive probe.** Run the probe YOURSELF, in
    the main loop — never delegate it. Subagents are exempt by design, so a
    delegated canary always succeeds and proves nothing: it creates the file
-   and manufactures a false DEAD. First run
-   `echo "OPULENT_OFF=[$OPULENT_OFF] OPULENT_ECO=[$OPULENT_ECO]"` and report
-   both dials — as what the Bash shell sees, never as authority: the hook
-   reads the harness environment, which can differ (launcher vs shell rc).
-   Even if the echo shows `OPULENT_OFF` set, run the canary; the denial, or
-   its absence, is the authority.
+   and manufactures a false DEAD.
    Run exactly: `touch opulent-doctor-canary`
    - **Denied** with an Opulent routing message → enforcement is LIVE. A
      LIVE verdict must be corroborated in step 5: this denial appends a
      fresh `probe` line to the log, and a LIVE-looking canary with no fresh
      probe line means the log path is broken — or the probe ran in a
      subagent.
-   - **Succeeds** → clean up (`rm opulent-doctor-canary`). If the harness
-     truly has `OPULENT_OFF` set, this is enforcement intentionally OFF
-     (the injected policy carries an OFF note in that case); otherwise
-     enforcement is DEAD despite the plugin being installed. Say which,
-     plainly.
-
-   `OPULENT_ECO` is a separate dial and changes nothing about this probe. If
-   it is set, report eco mode as **ON**, not as a fault: the implementation
-   lane for the session is `opulent:coder-high` (Opus, effort high), and a
-   spawn of `opulent:coder` OR `opulent:coder-max` is *expected* to be denied
-   with a redirect there — that denial is eco mode capping the ladder,
-   working as asked. `opulent:coder-lite` stays spawnable either way. Confirm
-   `opulent:coder-high` is in your available-agents list while you are there;
-   eco mode with the cap's rung unregistered leaves implementation with
-   nowhere to go.
+   - **Succeeds** → clean up (`rm opulent-doctor-canary`). Enforcement is
+     DEAD despite the plugin being installed. Say so plainly; there is no
+     dial that legitimately produces this result.
 
 5. **Telemetry.** Tail the routing log — `$OPULENT_LOG` if set, else
    `~/.claude/opulent-log.jsonl`: total lines, counts per event, timestamp of
    the newest entry. The vocabulary: `edit` (a main-loop write, allowed and
    recorded), `test` (a main-loop test run, likewise — one command can log
-   both), `delegate`, `deny` (control-plane refusals, plus the catch-all and
-   Explore redirects), `remove` (rm and destructive git — reset --hard,
-   clean, checkout --, restore, stash drop — logged, not denied), `unparsed`
-   (a command the parser could not read, so any write in it happened
-   unaudited), `probe` (the doctor's own canary denial), `codex` (the
-   Codex-lane redirect under `OPULENT_CODEX` — detail `codex:coder`,
-   `codex:coder-lite`, `codex:coder-high` or `codex:coder-max`, naming the rung
-   that was closed), and `eco` (the
-   capped-ladder redirect under `OPULENT_ECO` — detail `eco:coder` or
-   `eco:coder-max`, naming the rung that was capped). `probe` and `eco` are
-   their own events for one shared reason: a denial the operator asked for
-   must not inflate the denial count. Since 0.11.3 each line carries `sid`
-   (session id) and resolved absolute paths, and a fresh install's
-   session-start line reads "No routing activity recorded yet".
+   both), `delegate`, `deny` (control-plane refusals, plus the catch-all
+   redirect), `remove` (rm and destructive git — reset --hard, clean,
+   checkout --, restore, stash drop — logged, not denied), `unparsed` (a
+   command the parser could not read, so any write in it happened unaudited),
+   and `probe` (the doctor's own canary denial). `probe` is its own event for
+   one reason: a denial the operator asked for must not inflate the denial
+   count. Since 0.11.3 each line carries `sid` (session id) and resolved
+   absolute paths, and a fresh install's session-start line reads "No routing
+   activity recorded yet".
 
-4b. **Codex lane.** Report `OPULENT_CODEX` as **ON** or **OFF**, not as a
-   fault. When it is ON, implementation for the session is `opulent-codex sol`
-   and a spawn of ANY coder rung — `opulent:coder`, `opulent:coder-lite`,
-   `opulent:coder-high`, `opulent:coder-max` — is *expected* to be denied with
-   a redirect there, logging as event `codex` with detail `codex:<rung>`. It
-   takes precedence over `OPULENT_ECO`, which caps a ladder the dial has
-   closed; if both are set, say so. Either way, check the lane is runnable:
-   `opulent-codex --help` must work (plugin `bin/` is on PATH in agent
-   context), and `codex --version` and `codex login status` must both succeed —
-   Codex is a prerequisite, not a bundled dependency. A dial that is ON with a
-   Codex that cannot run leaves implementation with nowhere to go, which is the
-   one state worth reporting loudly.
    Interpret honestly: no file + live enforcement = fresh install, fine; no
    file + recent heavy agent use = enforcement was not running when that
    work happened — the exact silent gap this command exists to catch. Third
@@ -102,12 +69,10 @@ failed.
    denial count honest too). If it executes, it was a dry run — harmless —
    report the danger hook as not live.
 
-Verdict, one line — append `· ECO` when `OPULENT_ECO` is set, since a session
-running one rung down should say so: **LIVE** · **OFF** (by OPULENT_OFF — intentional) ·
-**PARTIAL** (say which half works) · **DEAD** (installed but not enforcing —
-recommend checking the plugin's enable state in /plugin, restarting the
-session so hooks reload, and — for version drift — BOTH
-`claude plugin marketplace update opulent` and then
+Verdict, one line: **LIVE** · **PARTIAL** (say which half works) · **DEAD**
+(installed but not enforcing — recommend checking the plugin's enable state
+in /plugin, restarting the session so hooks reload, and — for version drift —
+BOTH `claude plugin marketplace update opulent` and then
 `claude plugin update opulent@opulent`, since the first refreshes only the
 marketplace cache and moves nothing on its own; run both from OUTSIDE a
 session, or restart immediately after — an in-session update removes the

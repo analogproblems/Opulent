@@ -1,6 +1,6 @@
 ---
 name: coder
-description: Complex implementation — new features, tricky bug fixes, multi-file refactors, anything needing deep reasoning about code. The default rung of the coder ladder (Opus, effort xhigh — Anthropic's recommended setting for coding). MUST BE USED for all non-trivial code changes; the main loop delegates implementation rather than writing it itself. Pick it when the change spans files you cannot all name up front, or when finding the right change is itself part of the job. Drop to coder-high or coder-lite when the spec is bounded — over-effort is not a safe default, it returns more code than the task deserves. Escalate to coder-max ONLY on a named hazard or a lower rung that already failed.
+description: Complex implementation — new features, tricky bug fixes, multi-file refactors, anything needing deep reasoning about code. The default implementation lane (Opus, effort xhigh — Anthropic's recommended setting for coding). MUST BE USED for all non-trivial code changes; the main loop delegates implementation rather than writing it itself. This is the right lane for implementation unless a named hazard is in scope, which is the one thing that sends work to coder-max instead. Feeling hard is not a hazard, and neither is caring about the outcome. Purely mechanical edits go to mechanic.
 model: opus
 effort: xhigh
 ---

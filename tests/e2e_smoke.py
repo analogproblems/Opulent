@@ -91,8 +91,8 @@ def check(name, output, *needles):
 
 
 # 1. A registered opulent agent actually runs. The previous version asked the
-# model to recite its agent roster and grepped for six lane names — but all
-# six appear verbatim in the policy this plugin injects into that same
+# model to recite its agent roster and grepped for the lane names — but every
+# one of them appears verbatim in the policy this plugin injects into that same
 # session, so a session with ZERO registered agents passed by quoting its own
 # instructions back. The needle is now a per-run nonce planted in a file in
 # the session's scratch cwd: the injected policy cannot contain it, so only a
@@ -106,25 +106,26 @@ with open(os.path.join(work, "nonce.txt"), "w", encoding="utf-8") as fh:
 AGENT_LOG = os.path.join(scratch_dir(), "routing.jsonl")
 out = run_claude(REPO,
     "Use your subagent dispatch tool (Task or Agent) to spawn the agent type "
-    "opulent:scout with exactly this task: 'Read the file nonce.txt in the "
-    "current working directory and reply with its exact contents.' Then "
+    "opulent:test-runner with exactly this task: 'Read the file nonce.txt in "
+    "the current working directory and reply with its exact contents.' Then "
     "repeat the exact string the agent returned as your final answer. Do "
     "not read the file yourself. If the spawn fails or that agent type does "
     "not exist, reply exactly SPAWN FAILED and stop.",
     allowed_tools="Task,Agent,Read", log=AGENT_LOG, cwd=work)
-check("opulent:scout relays a nonce only a real agent run can produce",
+check("opulent:test-runner relays a nonce only a real agent run can produce",
       out, NONCE)
 events = read_events(AGENT_LOG)
 delegated = [e for e in events
              if e.get("event") == "delegate"
-             and "opulent:scout" in json.dumps(e)]
+             and "opulent:test-runner" in json.dumps(e)]
 if delegated:
     passed += 1
     print("PASS  routing hook records the delegation "
           f"(logged: {delegated[0].get('detail')})")
 else:
     print("FAIL  routing hook records the delegation: no `delegate` event "
-          "naming opulent:scout was logged, so the hook did not see the spawn")
+          "naming opulent:test-runner was logged, so the hook did not see "
+          "the spawn")
     print("--- session output ---")
     print(out)
     print("--- routing log ---")

@@ -18,16 +18,6 @@ tree, plus any .env. A plugin's *source* repo is ordinary code — it changes
 nothing until it is installed — and treating it as sacred is what made
 plugin development expensive.
 
-Escape hatch: set OPULENT_OFF=1 in the environment to disable enforcement.
-Eco mode: set OPULENT_ECO=1 and the coder ladder is capped at its high rung —
-this hook then denies `opulent:coder` and `opulent:coder-max` with a redirect
-to `opulent:coder-high` (the ladder's ordinary high rung: same model and
-charter, effort high), while the cheaper rungs stay spawnable.
-Codex lane: set OPULENT_CODEX=1 and implementation leaves for another vendor —
-this hook then denies ALL FOUR coder rungs with a redirect to the
-`opulent-codex sol` command, which is not an agent and cannot be spawned.
-Codex takes precedence over eco, which caps a ladder that is closed. Every
-dial is read from the environment, so every one is session-granular.
 Telemetry: main-loop edits, test runs, removals, delegations and denials each
 append one JSON line to ~/.claude/opulent-log.jsonl (override path with
 OPULENT_LOG). Lines carry the payload's session id (first 8 chars) when one
@@ -128,31 +118,6 @@ _COMMENT_RE = re.compile(r"(?m)(?:^|\s)#[^\n]*")
 # Catch-all agents have full tools and inherit the session model; delegating
 # to them satisfies "delegation" while defeating "routing".
 CATCHALL_AGENTS = {"general-purpose", "claude"}
-
-# Eco mode's cap on the coder ladder. The ladder only: the routing log shows
-# the judgment lanes barely fire, so capping them would save nothing, while
-# coder is the high-volume Opus spend. The default rung and the one above it
-# are capped; the rungs below are left alone, because spending less was never
-# the violation. ECO_TWIN is not a lane of its own — it is the ladder's
-# ordinary high rung, which anyone can spawn in any session; eco mode simply
-# caps the ladder there. Matched on the plugin-qualified name because that is
-# what the harness actually sends — every delegate line in the log names
-# "opulent:coder", none a bare "coder". Membership among exact names rather
-# than a prefix test, so neither the cap's own rung nor `opulent:coder-lite`
-# matches a lane it is not.
-ECO_LANES = ("opulent:coder", "opulent:coder-max")
-ECO_TWIN = "opulent:coder-high"
-
-# The Codex dial's claim on the same ladder, and a wider one: OPULENT_CODEX
-# sends implementation to another vendor, so all FOUR rungs are denied rather
-# than capped. Eco redirects to a rung — a cheaper way to do the same thing —
-# and this redirects to a command, because the Codex lane is not an agent and
-# cannot be spawned. That difference is the reason the two dials cannot share
-# a code path: one names a lane the architect can call next, the other names a
-# two-step the architect has to perform.
-CODEX_LANES = ("opulent:coder", "opulent:coder-lite", "opulent:coder-high",
-               "opulent:coder-max")
-CODEX_COMMAND = "opulent-codex sol"
 
 _OPERATORS = {";", "|", "||", "&&", "&", "(", ")", ";;", ";&", ";;&"}
 _REDIRECTS = {">", ">>", ">|", "&>", "&>>", ">&"}
@@ -309,20 +274,6 @@ _PATCH_READ_LIMIT = 2 * 1024 * 1024
 # stay refused now that ordinary writes are not, or the probe would report
 # enforcement dead the moment this hook started allowing things.
 CANARY = "opulent-doctor-canary"
-
-
-# A dial is read the way a person means it. `os.environ.get(name)` alone is
-# truthiness on a string, so OPULENT_OFF=0 and OPULENT_OFF=false — the two
-# spellings someone reaches for to mean "leave enforcement ON" — silently
-# disabled every denial for the whole session, and OPULENT_ECO=0 turned eco on.
-# A dial whose off position is indistinguishable from its on position is not a
-# dial.
-_OFF_VALUES = {"", "0", "false", "no", "off"}
-
-
-def dial(name):
-    """True when the named session dial is set to something meaning yes."""
-    return os.environ.get(name, "").strip().lower() not in _OFF_VALUES
 
 
 def _beneath(path, prefix):
@@ -1011,9 +962,6 @@ def main():
     global _SID
     payload = json.load(sys.stdin)
 
-    if dial("OPULENT_OFF"):
-        allow()
-
     if payload.get("agent_id"):  # inside a subagent: everything allowed
         allow()
 
@@ -1035,58 +983,13 @@ def main():
         # treatment a bare int already got for free from _log's own str().
         if not isinstance(st, str):
             st = str(st)
-        if st == "Explore":
-            # Plugin agents can't shadow built-ins, so redirect instead
-            deny("Routing policy: for exploration use the 'opulent:scout' agent "
-                 "(Haiku) instead of the built-in Explore agent.",
-                 "redirect:Explore")
         if st in CATCHALL_AGENTS:
             deny("Routing policy: catch-all agents inherit the session model and "
                  "bypass lane routing. Delegate to an opulent lane "
                  "(opulent:coder, opulent:mechanic, opulent:test-runner, "
-                 "opulent:scribe, opulent:scout, ...) or another purpose-defined "
-                 "agent instead.", "catchall:" + st)
-        if dial("OPULENT_CODEX") and st in CODEX_LANES:
-            # Every rung, not the top two: the dial is not about spending less
-            # on Opus, it is about the work being judged somewhere else. A rung
-            # left spawnable would be a silent hole in exactly the routing the
-            # operator threw a switch to get.
-            # Logged as its own event for the same reason eco is: a redirect
-            # the operator asked for is not a denial, and counting it as one
-            # inflates the number the doctor reports.
-            deny("Routing policy: the Codex lane is on for this session "
-                 "(OPULENT_CODEX), so implementation is judged by another "
-                 "vendor rather than by '%s'. Write a self-contained brief to "
-                 "your scratchpad and run `%s <absolute dir> <brief path>` "
-                 "with run_in_background — codex shares none of this "
-                 "conversation, so the brief carries the working directory, "
-                 "the goal, the constraints and the acceptance checks. It "
-                 "blocks; the harness re-invokes you when it exits."
-                 % (st, CODEX_COMMAND),
-                 "codex:" + st[len("opulent:"):], event="codex")
-        if dial("OPULENT_ECO") and st in ECO_LANES:
-            # One-way: the cap's own rung, and every rung below it, are
-            # spawnable whether or not eco is set, because voluntarily
-            # spending less is never a routing violation.
-            # Logged as its own event, not as "deny": an eco redirect is the
-            # dial working as asked, and counting it as a denial would inflate
-            # the number the doctor reports — the same reason `probe` exists.
-            # The detail names the rung that was capped, not a constant: a
-            # record that said "eco:coder" for both could not tell an architect
-            # reaching for max from one taking the default. The bare slice is
-            # safe only because membership in ECO_LANES was checked above and
-            # every entry is an "opulent:"-prefixed literal — a dynamically
-            # populated ECO_LANES would need removeprefix semantics back.
-            # "capped at the eco rung", not "one rung down": the cap is a place,
-            # and it is the same place for both denied lanes — coder falls one
-            # rung to reach it and coder-max falls two, so a message describing
-            # the caller's drop was false for half the lanes it was shown to.
-            deny("Routing policy: eco mode is on for this session (OPULENT_ECO), "
-                 "so implementation is capped at the eco rung — spawn the '%s' "
-                 "agent instead of '%s'. Same model and same charter; effort "
-                 "high, one rung below the ladder's default."
-                 % (ECO_TWIN, st),
-                 "eco:" + st[len("opulent:"):], event="eco")
+                 "opulent:scribe, ...), the built-in Explore agent for "
+                 "read-only search, or another purpose-defined agent "
+                 "instead.", "catchall:" + st)
         _log("delegate", st)
         allow()
 

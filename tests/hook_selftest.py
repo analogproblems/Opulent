@@ -46,11 +46,11 @@ def run(payload, env_extra=None, field="permissionDecision"):
     the only way to check that a redirect names the lane it redirects to."""
     raw = payload if isinstance(payload, str) else json.dumps(payload)
     env = dict(os.environ, OPULENT_LOG=os.devnull)
-    # Both session dials are cleared, so a suite run inherits neither: an
-    # OPULENT_ECO left set in the shell would otherwise turn the ordinary
-    # coder-lane case into an eco case without saying so.
-    env.pop("OPULENT_OFF", None)
-    env.pop("OPULENT_ECO", None)
+    # The dials retired in 0.15.0 are cleared anyway, so a shell that still
+    # exports one cannot make this suite pass for a reason the rows do not
+    # state. The retirement itself is asserted in the rows below.
+    for _retired in ("OPULENT_OFF", "OPULENT_ECO", "OPULENT_CODEX"):
+        env.pop(_retired, None)
     if env_extra:
         env.update(env_extra)
     try:
@@ -410,12 +410,14 @@ CASES = [
     ("main Write .CLAUDE hooks",      edit("Write", os.path.join(HOME, ".CLAUDE", "hooks", "x.py")), "deny"),
     ("main Write .claude Hooks",      edit("Write", os.path.join(HOME, ".claude", "Hooks", "x.py")), "deny"),
     ("main Write Settings.json",      edit("Write", os.path.join(HOME, ".claude", "Settings.json")), "deny"),
-    # A dial whose off position is indistinguishable from its on position is
-    # not a dial: these four spellings all disabled every denial.
+    # OPULENT_OFF was removed in 0.15.0. The row that matters is the last one:
+    # the spelling that used to disable every denial for a whole session now
+    # enforces like any other, and a reintroduced kill switch fails here.
     ("OPULENT_OFF=0 still enforces",  edit("Write", SETTINGS), "deny", {"OPULENT_OFF": "0"}),
     ("OPULENT_OFF=false enforces",    edit("Write", SETTINGS), "deny", {"OPULENT_OFF": "false"}),
-    ("OPULENT_OFF=no enforces",       edit("Write", SETTINGS), "deny", {"OPULENT_OFF": "no"}),
-    ("OPULENT_OFF=1 disables",        edit("Write", SETTINGS), "allow", {"OPULENT_OFF": "1"}),
+    ("OPULENT_OFF=1 no longer disables", edit("Write", SETTINGS), "deny", {"OPULENT_OFF": "1"}),
+    ("OPULENT_ECO no longer caps",    task("opulent:coder"),   "allow", {"OPULENT_ECO": "1"}),
+    ("OPULENT_CODEX no longer closes", task("opulent:coder-max"), "allow", {"OPULENT_CODEX": "1"}),
     # A named pipe blocks open() forever; the size cap bounds how much is read,
     # not whether the read returns. isfile() rejects it, and the ERROR() a hang
     # would produce is what this case is really watching for.
@@ -529,9 +531,9 @@ CASES = [
     ("main Bash fd duplication",     bash("some_command 2>&1"),                         "allow"),
     ("main Bash quoted gt (no FP)",  bash("git commit -m 'refactor: a > b mapping'"),   "allow"),
     # --- delegation routing: unchanged, this was never the lockout ---
-    ("main Task->Explore redirect",  task("Explore"),                                   "deny"),
-    ("main Agent->Explore redirect", {"tool_name": "Agent",
-                                      "tool_input": {"subagent_type": "Explore"}},     "deny"),
+    ("main Task->Explore allowed",   task("Explore"),                                   "allow"),
+    ("main Agent->Explore allowed",  {"tool_name": "Agent",
+                                      "tool_input": {"subagent_type": "Explore"}},    "allow"),
     ("main Task->general-purpose",   task("general-purpose"),                           "deny"),
     ("main Task->claude catch-all",  task("claude"),                                    "deny"),
     ("main Task->opulent lane",      task("opulent:coder"),                             "allow"),
@@ -539,39 +541,17 @@ CASES = [
     ("main Task->other plugin",      task("nimble:nimble-researcher"),                  "allow"),
     ("subagent Task->general",       task("general-purpose", "a3"),                     "allow"),
     ("subagent Task->Explore",       task("Explore", "a5"),                             "allow"),
-    # --- eco mode: OPULENT_ECO caps the coder ladder at its high rung ---
-    # The ladder, and one-way. The eco-unset half of the pair is the
-    # "main Task->opulent lane" row above: with the dial off, nothing changes.
-    # With it on, the ladder's default rung and everything above it are
-    # redirected — coder and coder-max — while the cheaper rungs stay spawnable
-    # in both directions, since spending less is not a violation.
-    # The subagent_type is the plugin-qualified name: 79 delegate lines in the
-    # routing log say "opulent:coder" and none say bare "coder".
-    ("eco Task->coder redirected",   task("opulent:coder"),          "deny",  {"OPULENT_ECO": "1"}),
-    ("eco Task->coder-max redirected", task("opulent:coder-max"),    "deny",  {"OPULENT_ECO": "1"}),
-    ("eco Agent->coder redirected",  {"tool_name": "Agent",
-                                      "tool_input": {"subagent_type": "opulent:coder"}},
-                                                                     "deny",  {"OPULENT_ECO": "1"}),
-    ("eco Task->coder-high spawns",  task("opulent:coder-high"),     "allow", {"OPULENT_ECO": "1"}),
-    # The cheap rung is not a violation, and it is also the case a redirect
-    # matched by prefix instead of by equality would wrongly deny.
-    ("eco Task->coder-lite spawns",  task("opulent:coder-lite"),     "allow", {"OPULENT_ECO": "1"}),
-    ("eco Task->mechanic untouched", task("opulent:mechanic"),       "allow", {"OPULENT_ECO": "1"}),
-    # Every other lane, one row each. scribe is the lane an over-eager "eco the
-    # expensive lanes" edit catches first, being the other Opus one — but a cap
-    # that grew an exploration or verification lane would deny work eco was
-    # never meant to touch, and until these rows existed one added name could
-    # refuse every scout in the session and pass both suites.
-    ("eco Task->scribe untouched",   task("opulent:scribe"),         "allow", {"OPULENT_ECO": "1"}),
-    ("eco Task->scout untouched",    task("opulent:scout"),          "allow", {"OPULENT_ECO": "1"}),
-    ("eco Task->test-runner untouched", task("opulent:test-runner"), "allow", {"OPULENT_ECO": "1"}),
-    ("eco Task->ui-checker untouched", task("opulent:ui-checker"),   "allow", {"OPULENT_ECO": "1"}),
-    ("eco subagent Task->coder",     task("opulent:coder", "a4"),    "allow", {"OPULENT_ECO": "1"}),
-    ("no eco Task->coder-high",      task("opulent:coder-high"),     "allow"),
-    ("no eco Task->coder-max",       task("opulent:coder-max"),      "allow"),
-    ("no eco Task->coder-lite",      task("opulent:coder-lite"),     "allow"),
-    # --- escape hatch, reads, garbage ---
-    ("OPULENT_OFF disables all",     edit("Edit", SETTINGS), "allow", {"OPULENT_OFF": "1"}),
+    # --- the ladder is two lanes now, and both spawn freely ---
+    ("main Task->coder-max",         task("opulent:coder-max"),                         "allow"),
+    ("main Task->mechanic",          task("opulent:mechanic"),                          "allow"),
+    ("main Task->scribe",            task("opulent:scribe"),                            "allow"),
+    ("main Task->test-runner",       task("opulent:test-runner"),                       "allow"),
+    # Lanes retired in 0.15.0 are not special-cased: an unregistered opulent:*
+    # name is an ordinary delegation the harness will reject on its own, and
+    # the hook inventing a denial for it would be a second source of truth.
+    ("main Task->retired scout",     task("opulent:scout"),                             "allow"),
+    ("main Task->retired ui-checker", task("opulent:ui-checker"),                       "allow"),
+    # --- reads, garbage ---
     ("main Read tool",               {"tool_name": "Read",
                                       "tool_input": {"file_path": PROJ}},              "allow"),
     ("malformed JSON",               "not json at all",                                 "allow"),
@@ -684,14 +664,7 @@ TELEMETRY = [
     # it — so this pins existing behavior rather than a new one.
     ("int subagent_type already logs a delegate",
      task(12345), "allow", ["delegate"], "12345"),
-    # Under eco too: the stringified list is not an ECO_LANES name, so it
-    # must delegate rather than be redirected or silently swallowed.
-    ("list subagent_type under eco still delegates",
-     task(["opulent:coder-max"]), "allow", ["delegate"],
-     "['opulent:coder-max']", {"OPULENT_ECO": "1"}),
     # --- denial events carry their kind, not `probe` ---
-    ("Explore redirect logs event deny",
-     task("Explore"), "deny", ["deny"], "redirect:Explore"),
     ("catch-all denial logs event deny",
      task("general-purpose"), "deny", ["deny"], "catchall:general-purpose"),
     # --- MultiEdit / NotebookEdit are guarded and recorded like Edit ---
@@ -968,8 +941,8 @@ for case in TELEMETRY:
 # refusal, and a denial that does not name the offending path cannot be acted
 # on. The reason text is part of the contract.
 REASONS = [
-    ("the Explore redirect names the scout lane",
-     task("Explore"), None, "opulent:scout"),
+    ("the catch-all denial points exploration at Explore",
+     task("general-purpose"), None, "Explore"),
     ("the catch-all denial names an opulent lane",
      task("general-purpose"), None, "opulent:coder"),
     ("the control-plane denial names the offending path",
@@ -1063,55 +1036,7 @@ print(f"{status}  a ..-spelled write to the routing log is denied: "
 
 LOG_GUARD_EXTRA = 2
 
-# --- eco mode: a redirect that does not NAME the lane it redirects to is just
-# a refusal, and a redirect logged as a denial inflates the denial count the
-# doctor reports — the same reason `probe` was given its own event. run()
-# reports only the decision, so the reason text, the event and the detail are
-# all checked here.
-ECO_ENV = {"OPULENT_ECO": "1"}
-# Named as the hook names it: this is the lane redirected TO. The hook's
-# ECO_LANES are the ones redirected FROM, and a suite that borrowed that name
-# for this constant would read as the exact inversion it is here to catch.
-ECO_TWIN = "opulent:coder-high"
-ECO = [
-    ("the eco redirect names the eco lane and logs event eco / eco:coder",
-     task("opulent:coder"), "eco", "eco:coder"),
-    # The detail names the rung that was capped, not a constant: a log that
-    # said "eco:coder" for both redirects could not tell an architect reaching
-    # for max from one taking the default.
-    ("the coder-max redirect names the eco lane and logs eco / eco:coder-max",
-     task("opulent:coder-max"), "eco", "eco:coder-max"),
-]
-
-for desc, payload, want_event, want_detail in ECO:
-    # The DIRECTED phrase, built from this row's own denied lane: `want_text in
-    # reason` on that lane's name alone cannot tell "spawn coder-high instead of
-    # coder-max" from the two names the other way round — and the other way
-    # round is a message telling the architect to spawn the lane just refused.
-    # The effort phrase is pinned beside it because the cap is a place, not a
-    # step: "one rung down" was false for coder-max, which falls two. The
-    # trailing effort claim is pinned too — a message that said "effort xhigh"
-    # would misstate the rung to the one reader deciding whether to comply.
-    denied = payload["tool_input"]["subagent_type"]
-    want_phrases = ("spawn the '%s' agent instead of '%s'" % (ECO_TWIN, denied),
-                    "capped at the eco rung", "effort high")
-    reason = run(payload, ECO_ENV, field="permissionDecisionReason")
-    got, entries = logged(payload, ECO_ENV)
-    events = [e.get("event") for e in entries]
-    details = [e.get("detail") for e in entries]
-    # isinstance first, as the REASONS loop above does: a reason that came back
-    # None (no denial at all, or a denial with no reason field) would otherwise
-    # raise out of the `in` and kill the run instead of failing one case.
-    ok = (got == "deny" and isinstance(reason, str)
-          and all(p in reason for p in want_phrases)
-          and events == [want_event] and want_detail in details)
-    status = "PASS" if ok else "FAIL"
-    if status == "FAIL":
-        failures += 1
-    print(f"{status}  {desc}: expected=deny/[{want_event}]/{want_detail}/says "
-          f"{want_phrases!r} got={got}/{events or 'nothing'}/{details or 'nothing'}/{reason!r}")
-
 total = (len(CASES) + len(TELEMETRY) + len(REASONS) + len(LOG_GUARD_CASES)
-         + LOG_GUARD_EXTRA + len(ECO))
+         + LOG_GUARD_EXTRA)
 print(f"\n{total - failures}/{total} passed")
 sys.exit(1 if failures else 0)

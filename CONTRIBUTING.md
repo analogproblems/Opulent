@@ -71,5 +71,5 @@ upstream it costs one command instead of a release.
 - **The plugins must stay independently installable.** opulent must not
   require lens-library, or vice versa.
 - **Prompts are code.** Agent definitions carry contracts (coverage-first
-  reporting, locate-only scout); dilute them and the tests won't catch it, but
-  a fresh-context review will.
+  reporting, no-edit-tools test-runner); dilute them and the tests won't
+  catch it, but a fresh-context review will.

@@ -1,6 +1,6 @@
 ---
 name: coder-max
-description: The top rung of the coder ladder — the same complex-implementation charter as coder, at maximum effort. Use ONLY when one of two facts holds, and say which one in the brief. Either the change touches a named hazard — concurrency, auth or crypto, a data migration, money, or a public contract others depend on — or a lower rung already attempted this task and failed review or tests. Absent one of those, max is not the safe choice but the worse one — it overthinks bounded work and returns a larger, more abstracted change than was asked for. Feeling hard is not a hazard. Routine implementation goes to coder instead.
+description: The hazard lane — the same complex-implementation charter as coder, at maximum effort. Use ONLY when one of two facts holds, and say which one in the brief. Either the change touches a named hazard — concurrency, auth or crypto, a data migration, money, or a public contract others depend on — or coder already attempted this task and failed review or tests. Absent one of those, max is not the safe choice but the worse one — it overthinks bounded work and returns a larger, more abstracted change than was asked for. Feeling hard is not a hazard. Routine implementation goes to coder instead.
 model: opus
 effort: max
 ---

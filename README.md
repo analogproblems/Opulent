@@ -8,7 +8,7 @@ If you use Claude Code for long sessions, you already know the problem: routing 
 
 Opulent solves this by intelligently dividing the workload across Anthropic's model family based on their recommended use cases, drastically reducing your token spend.
 
-Your most capable model (Opus 5 or Fable) stays in the architect seat—designing, reviewing, and orchestrating the broader workflow. Meanwhile, all the high-volume execution—like grepping files, running tests, and applying standard code edits—is automatically delegated to faster, cost-effective models like Haiku or Sonnet.
+Your most capable model (Opus 5 or Fable) stays in the architect seat—designing, reviewing, orchestrating, and seeing the UI it asked for with its own eyes. Meanwhile, the high-volume execution—running tests, applying standard code edits—is automatically delegated to Sonnet, and searching goes to Claude Code's own read-only `Explore` agent.
 
 By routing the bulk data to the right tool for the job, Opulent preserves your expensive tokens for complex reasoning and keeps your sessions incredibly efficient.
 
@@ -46,56 +46,52 @@ claude --plugin-dir /path/to/Opulent
 
 ## 🚦 How Routing Works
 
-Opulent routes work based on **task fit, not just cost**. Judgment and complexity go to Opus; bounded mechanical execution goes to Sonnet; locating goes to Haiku. 
+Opulent routes work based on **task fit, not just cost**. Judgment and complexity go to Opus; bounded mechanical execution goes to Sonnet; locating goes to the built-in `Explore` agent. 
 
 Here is exactly where your tasks go:
 
 | Work | Agent | Model & Effort |
 | :--- | :--- | :--- |
-| **Architecture, review, orchestration** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 or Fable) |
-| **Complex implementation (default rung)** | `opulent:coder` | Opus, Effort: xHigh |
-| **Named hazard, or a failed lower rung** | `opulent:coder-max` | Opus, Effort: Max |
-| **A few known files, no hazard** | `opulent:coder-high` | Opus, Effort: High |
-| **Every file named, a check would catch it** | `opulent:coder-lite` | Opus, Effort: Medium |
-| **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet |
-| **Tests, builds, linters** | `opulent:test-runner` | Sonnet (no edit tools) |
-| **UI verification, console errors** | `opulent:ui-checker` | Sonnet + browser tools |
+| **Architecture, review, orchestration, UI verification** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 or Fable) |
+| **Complex implementation (the default)** | `opulent:coder` | Opus, Effort: xHigh |
+| **Implementation touching a named hazard** | `opulent:coder-max` | Opus, Effort: Max |
+| **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet, Effort: xHigh |
+| **Tests, builds, linters** | `opulent:test-runner` | Sonnet, Effort: xHigh (no edit tools) |
 | **Documentation (READMEs, ADRs)** | `opulent:scribe` | Opus, Effort: High |
-| **Locating code and structure** | `opulent:scout` | Haiku |
-| **Implementation judged by another vendor** | `opulent-codex sol` | OpenAI Codex, GPT-5.6, Effort: Max |
-| **Second-witness review of a diff** | `opulent-codex review` | OpenAI Codex, read-only |
+| **Locating code and structure** | *Built-in `Explore` agent* | Claude Code's own read-only searcher |
 
-*A lane whose definition lists no tools (the coder ladder — coder, coder-max, coder-high, coder-lite — and mechanic) inherits all tools.*
+*A lane whose definition lists no tools (`opulent:coder`, `opulent:coder-max`, `opulent:mechanic`) inherits all tools.*
 
-**The coder lane is a ladder.** Its four rungs share one charter and differ only in effort: `opulent:coder` at `xhigh` is the default — Anthropic's recommended setting for coding — with `opulent:coder-high` at Anthropic's documented sweet spot for quality against token efficiency, `opulent:coder-lite` for changes whose every file the spec already names, and `opulent:coder-max` reserved for a named hazard (concurrency, auth or crypto, a data migration, money, a public contract) or a lower rung that already failed review or tests.
+**Implementation is a binary choice.** `opulent:coder` at `xhigh` — Anthropic's recommended setting for coding — is the answer for every non-trivial change. The single thing that moves work off it is a **named hazard**: concurrency, auth or crypto, a data migration, money, or a public contract others depend on. That, and only that, is what `opulent:coder-max` is for, along with a resubmission after `opulent:coder` failed review or tests.
 
-**The rung is picked from the spec, not from the mood.** Three questions answer it — can you name every file the change touches, would an existing check catch a wrong answer, is a named hazard in scope? — and they are answerable only once the spec exists, which is why the ladder asks you to write it first. Escalation is priced as a quality risk rather than a bill, because that is what it is: a rung above the work returns *worse* code, not safer code, since the effort it cannot spend on the problem it spends on structure the problem never needed. Guidance that only ever priced over-effort in tokens made max the rational reflex, and the reflex is the failure mode. Under-reaching, by contrast, is visible and cheap to undo — if a rung's output fails review or tests, resubmit one rung up.
+**Max is not the safe choice.** Escalation is priced here as a quality risk rather than a bill, because that is what it is: effort above the work returns *worse* code, not safer code, since what it cannot spend on the problem it spends on structure the problem never needed. Guidance that only ever priced over-effort in tokens made max the rational reflex, and the reflex is the failure mode. Feeling hard is not a hazard, and neither is caring about the outcome. The mistake is cheap in one direction only — under-reaching is visible and recoverable, so if coder's output fails review or tests, resubmit to `opulent:coder-max` and say that is why.
+
+**UI verification is deliberately not a lane.** The architect drives the browser itself. A design judgment made from another model's description of a screenshot is a design judgment made blind — the model that decided how the interface should look is the one that needs to see whether it does.
 
 *Note: You can manually escalate problems Opus can't crack to Fable in its own separate session. You can also run Fable in the Architect seat if you have access!*
 
 ---
 
-## 🎛️ Setting the Dials (Eco Mode)
+## 🎛️ Configuration
 
-Opulent is configured via environment variables. *Note: The hooks read these from the environment Claude Code was launched with — exporting them inside a running session does nothing, and a change takes effect at the next session start.*
+There is one knob, and most people never touch it.
 
-* **Eco Mode (`OPULENT_ECO=1`):** Caps the coder ladder at its `opulent:coder-high` rung. It routes both `opulent:coder` and `opulent:coder-max` tasks there (Opus at `high` effort instead of `xhigh` or `max`). The cheaper rungs stay available — voluntarily spending less is never a routing violation. 
-* **Codex Lane (`OPULENT_CODEX=1`):** Closes the coder ladder and sends implementation to OpenAI Codex instead. All four rungs are denied with a redirect to `opulent-codex sol`; every other lane, and the architect, are unchanged — a brief costs more than the work for bounded mechanical tasks, and a second vendor buys nothing when running a test suite or locating a file. Takes precedence over eco mode, which caps a ladder this dial has closed. Requires the `codex` CLI; `opulent-codex review` and `opulent-codex terra` are available whether or not the dial is thrown.
-* **Kill Switch (`OPULENT_OFF=1`):** Disables enforcement entirely for that session.
-* **Custom Logs (`OPULENT_LOG=<path>`):** Redirects the telemetry log from its default location, `~/.claude/opulent-log.jsonl`.
+* **Custom Logs (`OPULENT_LOG=<path>`):** Redirects the telemetry log from its default location, `~/.claude/opulent-log.jsonl`. Set it to `/dev/null` to keep no record at all.
 
-**How to set them:**
+*Note: The hook reads this from the environment Claude Code was launched with — exporting it inside a running session does nothing, and a change takes effect at the next session start.*
+
 Per launch:
 ```bash
-OPULENT_ECO=1 claude
+OPULENT_LOG=/tmp/opulent.jsonl claude
 ```
 Persistently (in `~/.claude/settings.json`):
 ```json
-{ "env": { "OPULENT_ECO": "1" } }
+{ "env": { "OPULENT_LOG": "/tmp/opulent.jsonl" } }
 ```
-*(0, false, no, off, and empty all count as unset).*
 
 One heads-up: if you ask the assistant to make that `settings.json` edit for you, the hook will deny it — settings files are the control plane, so the change gets redirected to a lane. That's the design working; make the edit yourself in an editor if you prefer.
+
+*Versions before 0.15.0 also shipped `OPULENT_ECO`, `OPULENT_CODEX`, and `OPULENT_OFF`. All three are gone; setting them now does nothing.*
 
 ---
 
@@ -104,7 +100,7 @@ One heads-up: if you ask the assistant to make that `settings.json` edit for you
 Opulent uses built-in Claude Code hooks (PreToolUse and SessionStart). 
 
 **What it enforces:**
-Main-loop edits and test runs are **allowed and logged** — the hook records what the architect touches instead of blocking it. What it *does* deny from the main loop: the **control plane** (any `.claude` directory's hooks, agents, commands, plugins, and the `settings*.json` beside them — the user's and the project's — plus `.env` files, templates like `.env.example` excepted), the built-in Explore agent, catch-all agents, and the routing log itself.
+Main-loop edits and test runs are **allowed and logged** — the hook records what the architect touches instead of blocking it. What it *does* deny from the main loop: the **control plane** (any `.claude` directory's hooks, agents, commands, plugins, and the `settings*.json` beside them — the user's and the project's — plus `.env` files, templates like `.env.example` excepted), catch-all agents (`general-purpose`, `claude`), and the routing log itself.
 
 **What it isn't:**
 This is a seatbelt with an audit trail, not a flawless security boundary. A determined model *can* bypass it via inline scripts or exotic utilities. The goal is to make the recorded path the path of least resistance: the log (`~/.claude/opulent-log.jsonl` by default) records main-loop edits, test runs, delegations, denials, and removals, session-tagged. Work done inside lanes isn't logged — the record covers the architect's own hands. The log is yours to delete between sessions; the main loop is denied touching it.
@@ -117,7 +113,7 @@ This is a seatbelt with an audit trail, not a flawless security boundary. A dete
 
 Run `/opulent:doctor` in your session. 
 
-It probes the installation with real tool calls (checking version, registered agents, injected policies, and enforcement liveness via a canary write) and gives you a one-line verdict (**LIVE / OFF / PARTIAL / DEAD**) along with remediation steps. 
+It probes the installation with real tool calls (checking version, registered agents, injected policies, and enforcement liveness via a canary write) and gives you a one-line verdict (**LIVE / PARTIAL / DEAD**) along with remediation steps. 
 
 *(Remember: run this in a session started AFTER the plugin was enabled!)*
 
