@@ -96,7 +96,7 @@ for m in members():
 # the variant keeps the charter it was copied from only for as long as someone
 # remembers to edit both files. This is that someone.
 ORIGINAL = "agents/coder.md"
-VARIANTS = {"coder-max": "max"}
+VARIANTS = {"coder-max": "xhigh"}
 RUNG_FIELDS = {"name", "description", "effort"}
 
 
@@ -154,14 +154,16 @@ routing = hook_namespace("hooks/route-models.py")
 policy_ns = hook_namespace("hooks/session-start.py")
 
 front, body = agent_parts(ORIGINAL)
-# The default, pinned rather than merely inherited: Anthropic's guidance puts
-# coding and agentic work at xhigh, and a default that drifted up to max would
-# undo the one distinction this plugin still draws about implementation.
-if front.get("effort") != "xhigh":
+# The default, pinned rather than merely inherited. Anthropic's published
+# guidance puts coding at xhigh; this plugin deliberately sits one step below
+# it as of 0.17.0, on the same reasoning the policy gives for not defaulting to
+# max — effort above the work returns worse code. The pin exists so that
+# departure stays a decision somebody made, rather than drift.
+if front.get("effort") != "high":
     raise SystemExit(
-        f"{ORIGINAL}: effort is {front.get('effort')!r}, expected 'xhigh' — "
-        f"the default implementation lane is xhigh, Anthropic's recommended "
-        f"coding setting")
+        f"{ORIGINAL}: effort is {front.get('effort')!r}, expected 'high' — "
+        f"the default implementation lane sits one step below Anthropic's "
+        f"published xhigh coding recommendation, deliberately, since 0.17.0")
 # The variant is checked against THIS body, which makes the sync mutual and
 # anchored to nothing: two empty files agree with each other perfectly. So the
 # file the variant is measured from is pinned to the charter it carries, and
@@ -271,7 +273,7 @@ if "`Explore`" not in CONTEXT:
 # thing routing a fan-out into opulent lanes. Deleted or reworded away, every
 # ultracode run silently spends the session model on work the Sonnet lanes
 # exist to take — and nothing anywhere would report it.
-for needle in ("agentType", "Workflow"):
+for needle in ("agentType", "Workflow", "inherit"):
     if needle not in CONTEXT:
         raise SystemExit(
             f"hooks/session-start.py: CONTEXT never says {needle!r} — the "

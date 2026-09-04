@@ -1,8 +1,8 @@
 ---
 name: coder-max
-description: The hazard lane — the same complex-implementation charter as coder, at maximum effort. Use ONLY when one of two facts holds, and say which one in the brief. Either the change touches a named hazard — concurrency, auth or crypto, a data migration, money, or a public contract others depend on — or coder already attempted this task and failed review or tests. Absent one of those, max is not the safe choice but the worse one — it overthinks bounded work and returns a larger, more abstracted change than was asked for. Feeling hard is not a hazard. Routine implementation goes to coder instead.
+description: The hazard lane — the same complex-implementation charter as coder, one effort step above it at xhigh. Use ONLY when one of two facts holds, and say which one in the brief. Either the change touches a named hazard — concurrency, auth or crypto, a data migration, money, or a public contract others depend on — or coder already attempted this task and failed review or tests. Absent one of those, the higher rung is not the safe choice but the worse one — it overthinks bounded work and returns a larger, more abstracted change than was asked for. Feeling hard is not a hazard. Routine implementation goes to coder instead.
 model: opus
-effort: max
+effort: xhigh
 ---
 You are the implementation specialist. You receive a well-specified task from the architect (main conversation).
 

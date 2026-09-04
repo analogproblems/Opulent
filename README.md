@@ -53,17 +53,17 @@ Here is exactly where your tasks go:
 | Work | Agent | Model & Effort |
 | :--- | :--- | :--- |
 | **Architecture, orchestration, docs, UI verification** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 or Fable) |
-| **Complex implementation (the default)** | `opulent:coder` | Opus, Effort: xHigh |
-| **Implementation touching a named hazard** | `opulent:coder-max` | Opus, Effort: Max |
-| **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet, Effort: xHigh |
-| **Tests, builds, linters** | `opulent:test-runner` | Sonnet, Effort: xHigh (no edit tools) |
+| **Complex implementation (the default)** | `opulent:coder` | Opus, Effort: High |
+| **Implementation touching a named hazard** | `opulent:coder-max` | Opus, Effort: xHigh |
+| **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet, Effort: High |
+| **Tests, builds, linters** | `opulent:test-runner` | Sonnet, Effort: High (no edit tools) |
 | **Locating code and structure** | *Built-in `Explore` agent* | Claude Code's own read-only searcher |
 
 *A lane whose definition lists no tools (`opulent:coder`, `opulent:coder-max`, `opulent:mechanic`) inherits all tools.*
 
-**Implementation is a binary choice.** `opulent:coder` at `xhigh` — Anthropic's recommended setting for coding — is the answer for every non-trivial change. The single thing that moves work off it is a **named hazard**: concurrency, auth or crypto, a data migration, money, or a public contract others depend on. That, and only that, is what `opulent:coder-max` is for, along with a resubmission after `opulent:coder` failed review or tests.
+**Implementation is a binary choice.** `opulent:coder` at `high` is the answer for every non-trivial change. That sits one step below Anthropic's published `xhigh` coding recommendation — a deliberate call, on the same reasoning that keeps the hazard lane from being the default: effort above the work returns worse code, not safer code. The single thing that moves work off it is a **named hazard**: concurrency, auth or crypto, a data migration, money, or a public contract others depend on. That, and only that, is what `opulent:coder-max` is for, along with a resubmission after `opulent:coder` failed review or tests.
 
-**Max is not the safe choice.** Escalation is priced here as a quality risk rather than a bill, because that is what it is: effort above the work returns *worse* code, not safer code, since what it cannot spend on the problem it spends on structure the problem never needed. Guidance that only ever priced over-effort in tokens made max the rational reflex, and the reflex is the failure mode. Feeling hard is not a hazard, and neither is caring about the outcome. The mistake is cheap in one direction only — under-reaching is visible and recoverable, so if coder's output fails review or tests, resubmit to `opulent:coder-max` and say that is why.
+**The higher rung is not the safe choice.** Escalation is priced here as a quality risk rather than a bill, because that is what it is: effort above the work returns *worse* code, not safer code, since what it cannot spend on the problem it spends on structure the problem never needed. Guidance that only ever priced over-effort in tokens made max the rational reflex, and the reflex is the failure mode. Feeling hard is not a hazard, and neither is caring about the outcome. The mistake is cheap in one direction only — under-reaching is visible and recoverable, so if coder's output fails review or tests, resubmit to `opulent:coder-max` (Opus at `xhigh`) and say that is why.
 
 **Two jobs are deliberately not lanes.** The architect keeps both, for the same reason.
 
@@ -75,9 +75,9 @@ Here is exactly where your tasks go:
 
 ---
 
-## 🚀 Using ultracode (and other fan-outs)
+## 🚀 Fan-outs, ultracode, and other plugins' agents
 
-Ask for `ultracode` — or any multi-agent orchestration — and Claude Code writes a little script that spawns a fleet of helpers in parallel. This is the one place Opulent's routing can't reach by itself, so it's worth two minutes of your time.
+Most agents you can spawn aren't Opulent lanes — other plugins ship their own, and a workflow script gets a generic one. Nearly all of them declare `model: inherit` or no model at all, which means **they run at your session's tier**. That's the right default for an author who can't see your session, and the wrong outcome inside one. It's also the one place Opulent's routing can't reach by itself, so it's worth two minutes of your time.
 
 **The catch.** A `Workflow` call isn't a `Task` or an `Agent` call, so Opulent's hook never sees it — and the helpers that script spawns are exempt the way every subagent is. Left alone, each one simply copies your *session* model. On an Opus session that means the mechanical edits and the test suite run on Opus too. That isn't a weaker version of the routing; it's the exact inverse of it, and it's the one way to make Opulent cost you money instead of saving it.
 

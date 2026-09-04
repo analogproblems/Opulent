@@ -10,6 +10,54 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.17.0 — 2026-09-03
+
+**Both implementation lanes step down one rung.** `opulent:coder` moves from
+xhigh to high and `opulent:coder-max` from max to xhigh. The relative shape is
+unchanged — one default, one escalation a single step above it, reached only by
+a named hazard or a failed attempt — but the whole ladder now sits lower.
+
+This puts the default one step below Anthropic's published xhigh recommendation
+for coding, which is a departure worth naming rather than burying. The
+reasoning is the one this plugin already applies to max: effort above the work
+returns worse code, not safer code, because what it cannot spend on the problem
+it spends on structure the problem never needed. The published guidance is a
+general recommendation; a routing plugin whose entire premise is that most work
+does not deserve the top tier is exactly the context where a general
+recommendation should be re-examined. The CI pin moves with it and keeps its
+job: the departure has to stay a decision somebody made, not drift.
+
+**The Sonnet lanes come down with them**, from xhigh to high, which reverses
+a call made two days ago in 0.15.0. That reasoning — with the cheap coder rungs
+gone there is no tier below mechanic and test-runner to fall through to — has
+not changed and was never the problem. What changed is that only half the
+matrix moved: leaving the support lanes at xhigh while the implementation lane
+dropped to high left the Sonnet lanes reading as nominally harder-thinking than
+the Opus one. That is not incoherent, since effort scales are not comparable
+across models and Sonnet-at-xhigh remains far cheaper than Opus-at-high, but it
+is confusing on the page, and a routing table that has to be explained before
+it can be read is a routing table that will be misread. Everything now sits at
+high except the hazard lane.
+
+**The delegation bridge stops being about Workflow.** It was written for
+`ultracode` because that was the case in front of us. The real rule is wider:
+most agents a session can spawn are not opulent lanes, and nearly all of them
+declare `model: inherit` or no model at all — which means they run at the
+session's tier. Thirty such agents were installed here against four routed
+lanes, so the plugin can never win this by enumerating them.
+
+That default is correct for its author. Someone shipping an agent cannot see
+your session and has no business pinning a model into it; `inherit` is the
+humble answer. It is also the exact inverse of this plugin's premise, and the
+two are only incoherent together — neither is a bug. So the policy now states
+the general case before the Workflow one: before spawning anything that is not
+a lane, ask what tier the work deserves, because a foreign agent's charter is
+rarely worth the tier it silently costs. Workflow keeps its own paragraph for
+the reason it always had one — it is the case nothing records.
+
+CI pins `inherit` in the policy text alongside `agentType` and `Workflow`, so
+the broadened rule cannot quietly narrow back to the case that prompted it.
+
 ## opulent 0.16.0 — 2026-09-01
 
 **Documentation stops being a lane.** `opulent:scribe` is removed, and the
