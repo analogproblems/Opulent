@@ -10,6 +10,34 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.18.0 — 2026-09-03
+
+**The coder lanes go back to xhigh and max**, reverting 0.17.0's step-down on
+the same day it shipped. The default returns to Anthropic's published coding
+recommendation, and the hazard lane to the top of the scale.
+
+0.17.0 argued that a plugin premised on most work not deserving the top tier is
+the right context to re-examine a general recommendation. The argument still
+reads well and the release stays in the history under its own tag, because a
+position tried and withdrawn is worth more on the record than one quietly
+reversed. But the departure bought nothing the escalation path did not already
+provide: an under-reaching default is recoverable by resubmitting one rung up,
+which is exactly what the policy already tells the architect to do, and paying
+for that recovery on every task to save on some of them is the trade running
+the wrong way.
+
+**Only the Sonnet lanes actually moved across the two releases.**
+`opulent:test-runner` settles at high and `opulent:mechanic` at xhigh, which is
+the one distinction worth drawing between them: mechanic writes code and
+test-runner does not. A verification lane that runs commands and reports what
+happened has less to think about than a lane editing files, and it has no Edit
+or Write tools to think with. The coder lanes did a round trip and are back
+where they started.
+
+The CI pin moves back with the value and now records the round trip in its own
+comment, so the next reader finds a decision with a history rather than a
+number that was always there.
+
 ## opulent 0.17.0 — 2026-09-03
 
 **Both implementation lanes step down one rung.** `opulent:coder` moves from
