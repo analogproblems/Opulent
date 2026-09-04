@@ -10,6 +10,27 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.19.0 — 2026-09-03
+
+**`opulent:coder` now says what a named hazard is.** Its description turned on
+the term — this is the right lane unless a named hazard is in scope — and then
+never defined it, pointing at `opulent:coder-max` instead. Every other surface
+carried the list: the hazard lane's own description, the injected policy, the
+README. The default lane was the one place a reader met the term cold.
+
+That is the worst place for the omission, because agent descriptions are read
+standalone. A model choosing between the two lanes sees each description on its
+own and is not guaranteed to have read the other one, or the policy, first — so
+the entire implementation routing decision hung on a term the lane making that
+decision never spelled out. Descriptions also survive without the SessionStart
+hook, which the policy does not.
+
+The list is now duplicated into a second file, which is a real cost and the
+reason it was not there already. Self-containment wins: a lane that cannot
+state its own escalation criterion is not self-describing, and CI already
+permits the two lanes to differ in `description` while pinning their bodies
+identical.
+
 ## opulent 0.18.0 — 2026-09-03
 
 **The coder lanes go back to xhigh and max**, reverting 0.17.0's step-down on
