@@ -45,7 +45,10 @@ failed.
    redirect), `remove` (rm and destructive git — reset --hard, clean,
    checkout --, restore, stash drop — logged, not denied), `unparsed` (a
    command the parser could not read, so any write in it happened unaudited),
-   and `probe` (the doctor's own canary denial). `probe` is its own event for
+   and `probe` (the doctor's own canary denial). Since 0.20.0 `deny` and
+   `probe` are written at PreToolUse, where the refusal happens; every other
+   event is written at PostToolUse, once the tool has actually succeeded, so
+   a call another plugin's hook refused never appears. `probe` is its own event for
    one reason: a denial the operator asked for must not inflate the denial
    count. Since 0.11.3 each line carries `sid` (session id) and resolved
    absolute paths, and a fresh install's session-start line reads "No routing
@@ -57,8 +60,14 @@ failed.
    branch: canary denied in step 4 but no fresh `probe` line here =
    `OPULENT_LOG` points somewhere unwritable (missing parent, a directory,
    a read-only mount) and telemetry is being silently discarded — the same
-   silent gap wearing a different face. A high `edit` count is not a fault:
-   it is the main loop working with the record intact.
+   silent gap wearing a different face. Fourth branch, new with 0.20.0: the
+   canary is denied AND a fresh `probe` line is there, but the session has
+   been editing and testing and no `edit` or `test` line is newer than the
+   session start = PreToolUse is live and PostToolUse is not subscribed — an
+   installed `hooks.json` older than the script it runs. Nothing is being
+   refused wrongly, and nothing is being recorded at all; the remedy is the
+   same update-and-restart as version drift below. A high `edit` count is
+   not a fault: it is the main loop working with the record intact.
 
 Verdict, one line: **LIVE** · **PARTIAL** (say which half works) · **DEAD**
 (installed but not enforcing — recommend checking the plugin's enable state
@@ -72,7 +81,9 @@ guarded tool call errors until restart).
 
 PARTIAL, concretely: policy injected and/or agents registered but the canary
 NOT denied → PARTIAL, SessionStart live and PreToolUse dead. Canary denied
-but agents missing → PARTIAL, hooks live and agents absent.
+but agents missing → PARTIAL, hooks live and agents absent. Canary denied
+but the record silent on a session that plainly edited → PARTIAL, PreToolUse
+live and PostToolUse dead.
 
 **Mid-session enable warning.** Plugin enable/disable takes effect only at
 session start: enabling Opulent mid-session registers neither its hooks nor

@@ -122,13 +122,13 @@ One heads-up: if you ask the assistant to make that `settings.json` edit for you
 
 ## 🛡️ Enforcement & Honesty
 
-Opulent uses built-in Claude Code hooks (PreToolUse and SessionStart). 
+Opulent uses built-in Claude Code hooks: `SessionStart` injects the policy, `PreToolUse` decides, and `PostToolUse` records. 
 
 **What it enforces:**
-Main-loop edits and test runs are **allowed and logged** — the hook records what the architect touches instead of blocking it. What it *does* deny from the main loop: the **control plane** (any `.claude` directory's hooks, agents, commands, plugins, and the `settings*.json` beside them — the user's and the project's — plus `.env` files, templates like `.env.example` excepted), catch-all agents (`general-purpose`, `claude`), and the routing log itself.
+Main-loop edits and test runs are **allowed and logged** — the hook records what the architect touches instead of blocking it, and it records them *after they have run*, so a call that some other plugin's hook refused never shows up as if it happened. What it *does* deny from the main loop: the **control plane** (any `.claude` directory's hooks, agents, commands and plugins — except `plugins/data/`, which is plugin state — the `settings*.json` beside them and another plugin's hook config such as `hookkit.json`, the user's and the project's, plus `.env` files, templates like `.env.example` excepted), catch-all agents (`general-purpose`, `claude`), and the routing log itself.
 
 **What it isn't:**
-This is a seatbelt with an audit trail, not a flawless security boundary. A determined model *can* bypass it via inline scripts or exotic utilities. The goal is to make the recorded path the path of least resistance: the log (`~/.claude/opulent-log.jsonl` by default) records main-loop edits, test runs, delegations, denials, and removals, session-tagged. Work done inside lanes isn't logged, and neither is anything inside a multi-agent workflow (see above) — the record covers the architect's own hands. The log is yours to delete between sessions; the main loop is denied touching it.
+This is a seatbelt with an audit trail, not a flawless security boundary. A determined model *can* bypass it via inline scripts or exotic utilities. The goal is to make the recorded path the path of least resistance: the log (`~/.claude/opulent-log.jsonl` by default) records main-loop edits, test runs, delegations, denials, and removals, session-tagged — outcomes, not attempts: everything but a denial is written once the tool has succeeded. Work done inside lanes isn't logged, and neither is anything inside a multi-agent workflow (see above) — the record covers the architect's own hands. The log is yours to delete between sessions; the main loop is denied touching it.
 
 *(Bonus: Opulent is designed to **fail-open**. If a Claude Code update breaks a payload the hook can't parse, it allows the action. An update will never brick your sessions.)*
 

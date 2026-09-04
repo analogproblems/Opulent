@@ -10,6 +10,55 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.20.0 — 2026-09-04
+
+**The record is now of outcomes, not attempts.** Until now the routing hook
+wrote its `edit`, `test`, `remove` and `delegate` lines at PreToolUse, before
+the tool ran, and then allowed. That was sound while Opulent was the only hook
+on the event. It is not: Claude Code runs every matching PreToolUse hook in
+parallel, and any one of them can deny. A danger gate refusing
+`git reset --hard`, or a worktree guard refusing an Agent call, meant Opulent
+had already logged a removal or a delegation that never happened — and the
+SessionStart activity line counted it. A log whose stated purpose is "what the
+main loop touched" cannot be a log of what the main loop tried.
+
+So the hook now runs on both halves of a tool call. PreToolUse decides, and
+records only its own refusals — `deny` and `probe` — because a denial is an
+outcome, and the one this hook owns. PostToolUse records everything else, and
+PostToolUse fires only once the tool has succeeded; a failed tool arrives on
+PostToolUseFailure, which Opulent does not subscribe to. `hooks.json` gains
+the second entry with the same matcher and the same command. The parser did
+not change; only when it is asked. An absent or unrecognised event name is
+treated as PreToolUse — a wrong denial is visible in the session, a wrong log
+line is not.
+
+Two corrections to what counts as the control plane, both found by reading
+Opulent beside the sibling plugins it will share sessions with:
+
+- **`<.claude>/plugins/data/` is state, not configuration.** It is
+  `CLAUDE_PLUGIN_DATA`, the documented directory a plugin keeps its own
+  persistent state in, written by hooks as they run. Denying it made every
+  plugin that remembers anything unfixable from the main loop, and the denial
+  called an audit log the control plane. The rest of `plugins/` stays guarded:
+  cache, marketplaces and `installed_plugins.json` decide which plugins load
+  at all.
+- **A sibling plugin's hook config is the control plane.** `.claude/hookkit.json`
+  switches another plugin's gates on and off, and a file that decides whether
+  a gate runs governs the session as surely as `settings.json` does. It is an
+  enumerated basename rather than `*.json`, because `.claude/launch.json` is
+  written by Claude in ordinary preview use, and a guard that fights the
+  harness over the harness's own file costs more than the accident it
+  prevents.
+
+Two things the split exposed. No suite drove the hook through `hooks.json` —
+every test invokes the script directly — so a dropped PostToolUse entry would
+have left every suite green and the record empty; `ci_checks.py` now pins both
+entries and drives one payload through each. And the doctor had no name for
+PreToolUse live with PostToolUse unsubscribed (an installed `hooks.json` older
+than its script): the canary is denied, a fresh `probe` line appears, and no
+`edit` or `test` line ever will. Step 5 of `/opulent:doctor` now names that
+branch and its remedy.
+
 ## opulent 0.19.0 — 2026-09-03
 
 **`opulent:coder` now says what a named hazard is.** Its description turned on

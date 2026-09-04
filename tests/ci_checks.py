@@ -399,6 +399,112 @@ if "No routing activity recorded yet" not in quiet_ctx or empty_log not in quiet
         "name the log path")
 print("session-start names the log path even before any activity")
 
+# The hook CONFIG, pinned — because nothing else in this repo goes through it.
+# hook_selftest.py runs route-models.py directly, so hooks.json can lose an
+# entry, misspell an event or drift its matcher and every suite stays green
+# while the harness quietly stops calling the hook at all. The PostToolUse
+# entry is the one that would fail invisibly: denials keep working, the doctor
+# canary still reports LIVE, and the only symptom is a record that never grows
+# again — which is precisely the silent gap this plugin exists to close.
+MATCHER = "Edit|Write|NotebookEdit|MultiEdit|Bash|Task|Agent"
+HOOKS_JSON = os.path.join("hooks", "hooks.json")
+with open(os.path.join(REPO, HOOKS_JSON)) as f:
+    hooks_cfg = json.load(f).get("hooks") or {}
+
+
+def sole_entry(event):
+    """The one matcher entry registered for `event`, and its one command.
+    Arity is asserted, not indexed past: a second entry appended beside the
+    first is a second invocation of the same hook, and "the first one looks
+    right" is how that goes unnoticed."""
+    entries = hooks_cfg.get(event)
+    if not isinstance(entries, list) or len(entries) != 1:
+        raise SystemExit(
+            f"{HOOKS_JSON}: {event} must register exactly one entry, found "
+            f"{len(entries) if isinstance(entries, list) else entries!r}")
+    commands = [h.get("command") for h in entries[0].get("hooks") or []]
+    if len(commands) != 1 or not commands[0]:
+        raise SystemExit(
+            f"{HOOKS_JSON}: {event} must invoke exactly one command, found "
+            f"{commands!r}")
+    return entries[0], commands[0]
+
+
+pre_entry, pre_cmd = sole_entry("PreToolUse")
+post_entry, post_cmd = sole_entry("PostToolUse")
+for _event, _entry in (("PreToolUse", pre_entry), ("PostToolUse", post_entry)):
+    if _entry.get("matcher") != MATCHER:
+        raise SystemExit(
+            f"{HOOKS_JSON}: the {_event} matcher is {_entry.get('matcher')!r}, "
+            f"expected {MATCHER!r} — the two events must watch the same tools, "
+            f"or a call gets decided on one and recorded on neither")
+if pre_cmd != post_cmd:
+    raise SystemExit(
+        f"{HOOKS_JSON}: PreToolUse and PostToolUse invoke different commands — "
+        f"one script serves both halves of a call, and a divergence here is two "
+        f"hooks wearing one name:\n  pre:  {pre_cmd}\n  post: {post_cmd}")
+if "hooks/route-models.py" not in pre_cmd:
+    raise SystemExit(
+        f"{HOOKS_JSON}: the tool-use events do not invoke hooks/route-models.py: "
+        f"{pre_cmd!r}")
+if "hooks/session-start.py" not in sole_entry("SessionStart")[1]:
+    raise SystemExit(
+        f"{HOOKS_JSON}: SessionStart does not invoke hooks/session-start.py")
+
+# ... and the split those two entries exist to serve, driven for real. The
+# config can be perfect while the script ignores the event name, which would
+# put the record back on PreToolUse where a denial from another plugin's hook
+# turns every line into a phantom.
+ROUTE = os.path.join(REPO, "hooks", "route-models.py")
+# Anchored at HOME rather than at REPO: the hook does not record writes under
+# the system temp dir, and CI checked out into one would otherwise "prove" the
+# recorder silent by feeding it a scratch path.
+EDITED = os.path.join(os.path.expanduser("~"), "opulent-ci-probe", "app.py")
+
+
+def route_lines(event):
+    """(stdout, log entries) from one run of the routing hook on `event`."""
+    body = {"hook_event_name": event, "tool_name": "Edit",
+            "tool_input": {"file_path": EDITED},
+            "cwd": os.path.dirname(EDITED)}
+    if event == "PostToolUse":
+        body["tool_response"] = {"success": True}
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as fh:
+        route_log = fh.name
+    try:
+        proc = subprocess.run(
+            [sys.executable, ROUTE], input=json.dumps(body), capture_output=True,
+            text=True, timeout=30, env=dict(os.environ, OPULENT_LOG=route_log))
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"hooks/route-models.py exited {proc.returncode} on {event}: "
+                f"{proc.stderr.strip()}")
+        with open(route_log) as fh:
+            entries = [json.loads(line) for line in fh if line.strip()]
+    finally:
+        os.unlink(route_log)
+    return proc.stdout.strip(), entries
+
+
+post_out, post_entries = route_lines("PostToolUse")
+if post_out:
+    raise SystemExit(
+        f"hooks/route-models.py: PostToolUse produced output — the recording "
+        f"half decides nothing and must stay silent: {post_out!r}")
+if [e.get("event") for e in post_entries] != ["edit"]:
+    raise SystemExit(
+        f"hooks/route-models.py: an ordinary edit at PostToolUse recorded "
+        f"{[e.get('event') for e in post_entries] or 'nothing'}, expected one "
+        f"`edit` line — the record lives on this event and nowhere else")
+pre_out, pre_entries = route_lines("PreToolUse")
+if pre_entries:
+    raise SystemExit(
+        f"hooks/route-models.py: the same edit at PreToolUse recorded "
+        f"{[e.get('event') for e in pre_entries]} — the deciding half writes a "
+        f"line only when it is the one refusing, or the log counts attempts "
+        f"another plugin's hook was still free to deny")
+print("hooks.json: PreToolUse decides, PostToolUse records")
+
 # The description users read in /plugin comes from the marketplace entry; the
 # manifest carries its own copy. Two hand-maintained copies of one sentence
 # drift, and the drifted one is whichever copy the reader happens to see.

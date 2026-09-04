@@ -2,6 +2,14 @@
 """Self-test for hooks/route-models.py — feeds payloads via stdin,
 checks allow (exit 0, no output) vs deny (JSON with permissionDecision=deny).
 
+The hook does a different job on each of its two events: PreToolUse DECIDES
+and PostToolUse RECORDS. The two tables below are split the same way. CASES,
+the decision table, sends payloads carrying NO hook_event_name at all — which
+is deliberate, and pins the hook's fail-toward-the-safer-branch rule: an event
+name it does not recognise is judged, never recorded. TELEMETRY, the record
+table, wraps every payload in post() or pre() so each row says out loud which
+half of the call it is about.
+
 Fixtures are built with os.path.join / tempfile so this suite tests the
 platform it runs on (the old fixtures hardcoded forward slashes and could
 not disagree with the code on Windows).
@@ -119,6 +127,30 @@ def task(subagent, agent=None, sid=None):
     return d
 
 
+def post(payload):
+    """The same call delivered on the event that RECORDS it. PostToolUse fires
+    only once the tool has succeeded, which is the whole reason the log lives
+    there: a line written at PreToolUse records an ATTEMPT, and any other
+    plugin's hook on that same event is still free to deny the call, leaving a
+    phantom behind. Every row asserting a log line therefore arrives here."""
+    d = dict(payload)
+    d["hook_event_name"] = "PostToolUse"
+    # The real payload carries the tool's own result on this event. Nothing in
+    # the hook reads it; it is here so the fixture is the shape the harness
+    # actually sends, rather than a PreToolUse payload wearing a new name.
+    d.setdefault("tool_response", {"success": True})
+    return d
+
+
+def pre(payload):
+    """The same call on the event that DECIDES it. Spelled out rather than left
+    implicit, so pre and post sit side by side in the record table and neither
+    reads as the default the other is an exception to."""
+    d = dict(payload)
+    d["hook_event_name"] = "PreToolUse"
+    return d
+
+
 PROJ = os.path.join(HOME, "project", "x.py")
 # Session cwd, supplied the way the real payload does it (top-level "cwd").
 CWD = os.path.join(HOME, "project")
@@ -127,6 +159,13 @@ CWD = os.path.join(HOME, "project")
 SRC = os.path.join(HOME, "Claude", "Fabeulous")
 HOOKS_DIR = os.path.join(HOME, ".claude", "hooks")
 SETTINGS = os.path.join(HOME, ".claude", "settings.json")
+# CLAUDE_PLUGIN_DATA: a plugin's own persistent state, written BY hooks rather
+# than read by them as rules. It lives inside plugins/, which is otherwise all
+# control plane, so it is the one carve-out in there.
+PLUGIN_DATA = os.path.join(HOME, ".claude", "plugins", "data", "hookkit", "state.json")
+# A sibling plugin's hook config, sitting directly under .claude the way
+# settings.json does and deciding as surely as it does whether a gate runs.
+HOOKKIT = os.path.join(HOME, ".claude", "hookkit.json")
 
 # Real directories, so the cp/mv "destination is a directory" branch can be
 # tested by what the filesystem says rather than by a trailing slash.
@@ -319,6 +358,30 @@ CASES = [
     ("main Bash tee plugin src",     bash("ls | tee " + os.path.join(SRC, "hooks", "x.py")),           "allow"),
     # --- the control plane: what governs the session that is running now ---
     ("main Write installed plugin",  edit("Write", os.path.join(HOME, ".claude", "plugins", "opulent", "hooks", "route-models.py")), "deny"),
+    ("main Write plugins cache",     edit("Write", os.path.join(HOME, ".claude", "plugins", "cache", "x.json")), "deny"),
+    ("main Write plugins marketplaces", edit("Write", os.path.join(HOME, ".claude", "plugins", "marketplaces", "m.json")), "deny"),
+    ("main Write installed_plugins", edit("Write", os.path.join(HOME, ".claude", "plugins", "installed_plugins.json")), "deny"),
+    # ... but plugins/data/ is CLAUDE_PLUGIN_DATA: state a plugin's hooks
+    # WRITE, not configuration they read. Denying it left every plugin that
+    # remembers anything unreadable and unfixable from the main loop, and
+    # bought no governance at all.
+    ("main Write plugin data file",  edit("Write", PLUGIN_DATA),                        "allow"),
+    ("main Bash redirect plugin data", bash("echo {} > " + PLUGIN_DATA),                "allow"),
+    ("main Bash rm plugin data",     bash("rm " + PLUGIN_DATA),                         "allow"),
+    ("main Write project plugin data", edit("Write", os.path.join(".claude", "plugins", "data", "p", "s.json"), cwd=CWD), "allow"),
+    # `data` has to sit immediately after `plugins` to be the carve-out: an
+    # installed plugin's own data/ directory is part of that plugin's tree.
+    ("main Write installed plugin's data", edit("Write", os.path.join(HOME, ".claude", "plugins", "opulent", "data", "x.json")), "deny"),
+    # --- a sibling plugin's hook config governs this session too ---
+    ("main Write user hookkit.json", edit("Write", HOOKKIT),                            "deny"),
+    ("main Write project hookkit",   edit("Write", os.path.join(".claude", "hookkit.json"), cwd=CWD), "deny"),
+    ("main Bash redirect hookkit",   bash("echo {} > .claude/hookkit.json", cwd=CWD),   "deny"),
+    # ... and that set stays ENUMERATED. Claude writes .claude/launch.json
+    # itself in ordinary preview use, so the tempting generalization — every
+    # *.json beside settings.json — would have the hook fighting the harness
+    # over the harness's own file.
+    ("main Write launch.json",       edit("Write", os.path.join(".claude", "launch.json"), cwd=CWD), "allow"),
+    ("main Write skill-rules.json",  edit("Write", os.path.join(".claude", "skill-rules.json"), cwd=CWD), "allow"),
     ("main Write user settings",     edit("Write", SETTINGS),                           "deny"),
     ("main Write settings.local",    edit("Write", os.path.join(HOME, ".claude", "settings.local.json")), "deny"),
     ("main Write user hook",         edit("Write", os.path.join(HOOKS_DIR, "x.py")),    "deny"),
@@ -551,6 +614,19 @@ CASES = [
     ("main Task->retired scout",     task("opulent:scout"),                             "allow"),
     ("main Task->retired ui-checker", task("opulent:ui-checker"),                       "allow"),
     ("main Task->retired scribe",    task("opulent:scribe"),                            "allow"),
+    # --- the two events: PreToolUse decides, PostToolUse only records ---
+    ("PreToolUse spelled out denies", pre(edit("Write", SETTINGS)),                     "deny"),
+    ("PostToolUse control plane is not denied", post(edit("Write", SETTINGS)),          "allow"),
+    ("PostToolUse catch-all is not denied", post(task("general-purpose")),              "allow"),
+    ("PostToolUse canary is not denied", post(bash("touch opulent-doctor-canary", cwd=CWD)), "allow"),
+    # An event name the hook does not know — a missing one, or one a future
+    # Claude Code introduces — falls to the DECIDING branch. That is the safer
+    # of the two mistakes: a denial nobody wanted is visible in the session,
+    # and a log line nobody wanted is not.
+    ("missing hook_event_name still denies", edit("Write", SETTINGS),                   "deny"),
+    ("unknown hook_event_name still denies",
+     {"tool_name": "Write", "tool_input": {"file_path": SETTINGS},
+      "hook_event_name": "PreToolUseV2"},                                               "deny"),
     # --- reads, garbage ---
     ("main Read tool",               {"tool_name": "Read",
                                       "tool_input": {"file_path": PROJ}},              "allow"),
@@ -613,303 +689,334 @@ SID = "session-1234-abcd"
 # main-loop write that is now ALLOWED still has to leave a line behind — and
 # the event LIST is asserted whole, with details naming resolved paths.
 TELEMETRY = [
+    # --- the split itself. Until 0.20.0 every line below was written at
+    # PreToolUse, where the action had not happened yet: another plugin's hook
+    # on the same event could still deny the call, and the log kept the line
+    # anyway. These four pin the deciding half writing NOTHING.
+    ("PreToolUse test run records nothing",
+     pre(bash("npm test", cwd=CWD)), "allow", []),
+    ("PreToolUse ordinary edit records nothing",
+     pre(edit("Edit", os.path.join(CWD, "src", "app.py"), cwd=CWD)), "allow", []),
+    ("PreToolUse rm records nothing",
+     pre(bash("rm src/old.py", cwd=CWD)), "allow", []),
+    ("PreToolUse delegation records nothing",
+     pre({"tool_name": "Agent", "tool_input": {"subagent_type": "opulent:coder"}}),
+     "allow", []),
+    # ... and the recording half deciding nothing. A control-plane write or a
+    # catch-all spawn that reaches PostToolUse HAPPENED — the hooks were off,
+    # or the denial was bypassed — so the record names it, with no output.
+    ("PostToolUse control-plane write is recorded as an edit",
+     post(edit("Write", SETTINGS)), "allow", ["edit"], SETTINGS),
+    ("PostToolUse catch-all spawn is recorded as a delegate",
+     post(task("general-purpose")), "allow", ["delegate"], "general-purpose"),
+    ("PostToolUse Agent delegation logs exactly one delegate",
+     post({"tool_name": "Agent", "tool_input": {"subagent_type": "opulent:coder"}}),
+     "allow", ["delegate"], "opulent:coder"),
+    # --- plugin data is state, so it is recorded like any other state the
+    # main loop touches, both when it is written and when it is deleted ---
+    ("a write under plugins/data is recorded as an edit",
+     post(edit("Write", PLUGIN_DATA)), "allow", ["edit"], PLUGIN_DATA),
+    ("a redirect into plugins/data is recorded as an edit",
+     post(bash("echo {} > " + PLUGIN_DATA, cwd=CWD)), "allow", ["edit"], PLUGIN_DATA),
+    ("an rm under plugins/data is recorded as a remove",
+     post(bash("rm " + PLUGIN_DATA, cwd=CWD)), "allow", ["remove"], PLUGIN_DATA),
     # --- the record's staples ---
     ("main edit logs exactly one edit",
-     edit("Edit", os.path.join(CWD, "src", "app.py"), cwd=CWD),
+     post(edit("Edit", os.path.join(CWD, "src", "app.py"), cwd=CWD)),
      "allow", ["edit"], R(CWD, "src", "app.py")),
     ("main bash write logs exactly one edit",
-     bash("echo hi > notes.txt", cwd=CWD), "allow", ["edit"], R(CWD, "notes.txt")),
+     post(bash("echo hi > notes.txt", cwd=CWD)), "allow", ["edit"], R(CWD, "notes.txt")),
     ("main test run logs exactly one test",
-     bash("pytest -q", cwd=CWD), "allow", ["test"], "pytest -q"),
+     post(bash("pytest -q", cwd=CWD)), "allow", ["test"], "pytest -q"),
     ("a write AND a test run log both events",
-     bash("pytest > results.txt", cwd=CWD), "allow", ["edit", "test"],
+     post(bash("pytest > results.txt", cwd=CWD)), "allow", ["edit", "test"],
      R(CWD, "results.txt")),
     ("scratch write is not logged",
-     edit("Write", os.path.join(TMP, "scratch.txt"), cwd=CWD), "allow", []),
+     post(edit("Write", os.path.join(TMP, "scratch.txt"), cwd=CWD)), "allow", []),
     ("bash scratch redirect is not logged",
-     bash("echo x > " + os.path.join(TMP, "opulent-scratch.txt"), cwd=CWD),
+     post(bash("echo x > " + os.path.join(TMP, "opulent-scratch.txt"), cwd=CWD)),
      "allow", []),
     ("bash write into plans is not logged",
-     bash("echo x > " + os.path.join(HOME, ".claude", "plans", "p.md"), cwd=CWD),
+     post(bash("echo x > " + os.path.join(HOME, ".claude", "plans", "p.md"), cwd=CWD)),
      "allow", []),
     ("subagent edit is not logged",
-     edit("Edit", PROJ, "a1"), "allow", []),
+     post(edit("Edit", PROJ, "a1")), "allow", []),
     ("control-plane denial logs exactly one deny",
-     edit("Write", SETTINGS), "deny", ["deny"], "control:" + SETTINGS),
+     pre(edit("Write", SETTINGS)), "deny", ["deny"], "control:" + SETTINGS),
     ("the canary is denied and logged as a probe, with its path",
-     bash("touch opulent-doctor-canary", cwd=CWD), "deny", ["probe"],
+     pre(bash("touch opulent-doctor-canary", cwd=CWD)), "deny", ["probe"],
      "canary:" + R(CWD, "opulent-doctor-canary")),
     # --- delegation: the log's dominant event, asserted at last ---
     ("Task delegation logs exactly one delegate",
-     task("opulent:coder"), "allow", ["delegate"], "opulent:coder"),
+     post(task("opulent:coder")), "allow", ["delegate"], "opulent:coder"),
     ("Agent-tool delegation logs exactly one delegate",
-     {"tool_name": "Agent", "tool_input": {"subagent_type": "opulent:mechanic"}},
+     post({"tool_name": "Agent", "tool_input": {"subagent_type": "opulent:mechanic"}}),
      "allow", ["delegate"], "opulent:mechanic"),
     ("subagent Task logs nothing",
-     task("opulent:coder", "a7"), "allow", []),
+     post(task("opulent:coder", "a7")), "allow", []),
     ("a session id in the payload lands on the log line",
-     task("opulent:coder", sid=SID), "allow", ["delegate"], "opulent:coder"),
+     post(task("opulent:coder", sid=SID)), "allow", ["delegate"], "opulent:coder"),
     ("session id on a bash edit line too",
-     bash("echo hi > notes.txt", cwd=CWD, sid=SID), "allow", ["edit"],
+     post(bash("echo hi > notes.txt", cwd=CWD, sid=SID)), "allow", ["edit"],
      R(CWD, "notes.txt")),
     # --- a malformed spawn payload cannot reach a real agent, so allow is
     # right — but it must still leave a record. subagent_type is not
     # guaranteed to be a string; these pin what the log shows when it isn't.
     ("list subagent_type still logs a delegate",
-     task(["opulent:coder-max"]), "allow", ["delegate"],
+     post(task(["opulent:coder-max"])), "allow", ["delegate"],
      "['opulent:coder-max']"),
     ("dict subagent_type still logs a delegate",
-     task({"a": 1}), "allow", ["delegate"], "{'a': 1}"),
+     post(task({"a": 1})), "allow", ["delegate"], "{'a': 1}"),
     # int already worked before this fix — _log's own str() coercion covered
     # it — so this pins existing behavior rather than a new one.
     ("int subagent_type already logs a delegate",
-     task(12345), "allow", ["delegate"], "12345"),
+     post(task(12345)), "allow", ["delegate"], "12345"),
     # --- denial events carry their kind, not `probe` ---
     ("catch-all denial logs event deny",
-     task("general-purpose"), "deny", ["deny"], "catchall:general-purpose"),
+     pre(task("general-purpose")), "deny", ["deny"], "catchall:general-purpose"),
     # --- MultiEdit / NotebookEdit are guarded and recorded like Edit ---
     ("NotebookEdit control-plane deny",
-     {"tool_name": "NotebookEdit",
-      "tool_input": {"notebook_path": os.path.join(HOOKS_DIR, "x.ipynb")}},
+     pre({"tool_name": "NotebookEdit",
+          "tool_input": {"notebook_path": os.path.join(HOOKS_DIR, "x.ipynb")}}),
      "deny", ["deny"], "control:" + os.path.join(HOOKS_DIR, "x.ipynb")),
     ("NotebookEdit ordinary write logs an edit",
-     {"tool_name": "NotebookEdit",
-      "tool_input": {"notebook_path": os.path.join(CWD, "nb.ipynb")}, "cwd": CWD},
+     post({"tool_name": "NotebookEdit",
+           "tool_input": {"notebook_path": os.path.join(CWD, "nb.ipynb")}, "cwd": CWD}),
      "allow", ["edit"], R(CWD, "nb.ipynb")),
     ("MultiEdit control-plane deny",
-     edit("MultiEdit", SETTINGS), "deny", ["deny"], "control:" + SETTINGS),
+     pre(edit("MultiEdit", SETTINGS)), "deny", ["deny"], "control:" + SETTINGS),
     ("MultiEdit ordinary write logs an edit",
-     edit("MultiEdit", os.path.join(CWD, "m.py"), cwd=CWD), "allow", ["edit"],
+     post(edit("MultiEdit", os.path.join(CWD, "m.py"), cwd=CWD)), "allow", ["edit"],
      R(CWD, "m.py")),
     # --- a falsy path is nothing: no judgment, no record ---
     ("Write with empty file_path logs nothing",
-     edit("Write", ""), "allow", []),
+     post(edit("Write", "")), "allow", []),
     ("Edit with no file_path at all logs nothing",
-     {"tool_name": "Edit", "tool_input": {}}, "allow", []),
+     post({"tool_name": "Edit", "tool_input": {}}), "allow", []),
     # --- an unparseable command still leaves a line ---
     ("unbalanced quote logs unparsed",
-     bash("echo it's here > notes.txt", cwd=CWD), "allow", ["unparsed"],
+     post(bash("echo it's here > notes.txt", cwd=CWD)), "allow", ["unparsed"],
      "echo it's here > notes.txt"),
     ("balanced apostrophe parses normally",
-     bash('echo "it\'s" > notes.txt', cwd=CWD), "allow", ["edit"],
+     post(bash('echo "it\'s" > notes.txt', cwd=CWD)), "allow", ["edit"],
      R(CWD, "notes.txt")),
     # --- deletions become visible ---
     ("rm logs a remove with resolved operands",
-     bash("rm src/old.py", cwd=CWD), "allow", ["remove"], R(CWD, "src", "old.py")),
+     post(bash("rm src/old.py", cwd=CWD)), "allow", ["remove"], R(CWD, "src", "old.py")),
     ("rm of several operands records them all",
-     bash("rm -rf build dist", cwd=CWD), "allow", ["remove"],
+     post(bash("rm -rf build dist", cwd=CWD)), "allow", ["remove"],
      R(CWD, "build") + ", " + R(CWD, "dist")),
     ("rm of scratch is not logged",
-     bash("rm " + os.path.join(TMP, "x.tmp"), cwd=CWD), "allow", []),
+     post(bash("rm " + os.path.join(TMP, "x.tmp"), cwd=CWD)), "allow", []),
     ("git reset --hard logs a remove",
-     bash("git reset --hard", cwd=CWD), "allow", ["remove"], "git reset --hard"),
+     post(bash("git reset --hard", cwd=CWD)), "allow", ["remove"], "git reset --hard"),
     ("git clean logs a remove",
-     bash("git clean -fd", cwd=CWD), "allow", ["remove"], "git clean -fd"),
+     post(bash("git clean -fd", cwd=CWD)), "allow", ["remove"], "git clean -fd"),
     ("git checkout -- logs a remove",
-     bash("git checkout -- .", cwd=CWD), "allow", ["remove"], "git checkout -- ."),
+     post(bash("git checkout -- .", cwd=CWD)), "allow", ["remove"], "git checkout -- ."),
     ("git restore logs a remove",
-     bash("git restore app.py", cwd=CWD), "allow", ["remove"], "git restore app.py"),
+     post(bash("git restore app.py", cwd=CWD)), "allow", ["remove"], "git restore app.py"),
     ("git stash drop logs a remove",
-     bash("git stash drop", cwd=CWD), "allow", ["remove"], "git stash drop"),
+     post(bash("git stash drop", cwd=CWD)), "allow", ["remove"], "git stash drop"),
     ("plain git checkout of a branch is not a remove",
-     bash("git checkout main", cwd=CWD), "allow", []),
+     post(bash("git checkout main", cwd=CWD)), "allow", []),
     ("git stash list is not a remove",
-     bash("git stash list", cwd=CWD), "allow", []),
+     post(bash("git stash list", cwd=CWD)), "allow", []),
     ("mv records source and destination",
-     bash("mv old.py new.py", cwd=CWD), "allow", ["edit"],
+     post(bash("mv old.py new.py", cwd=CWD)), "allow", ["edit"],
      R(CWD, "old.py") + " -> " + R(CWD, "new.py")),
     # --- reserved words / compounds: the twin false-positives log nothing ---
     ("echo do-mention logs nothing",
-     bash("echo do a barrel roll > /tmp/x", cwd=CWD), "allow", []),
+     post(bash("echo do a barrel roll > /tmp/x", cwd=CWD)), "allow", []),
     ("quoted then-cp in a commit message logs nothing",
-     bash('git commit -m "then cp a b"', cwd=CWD), "allow", []),
+     post(bash('git commit -m "then cp a b"', cwd=CWD)), "allow", []),
     # --- cp/mv directory destinations record the landed file ---
     ("cp into an existing dir records dir/basename",
-     bash("cp a.py src/", cwd=CWD), "allow", ["edit"], R(CWD, "src", "a.py")),
+     post(bash("cp a.py src/", cwd=CWD)), "allow", ["edit"], R(CWD, "src", "a.py")),
     # Three or more operands can only mean a directory destination — no
     # trailing slash and no filesystem check needed. (The isdir arm is pinned
     # by the "cp settings into real dir" deny above; a real dir under the
     # suite's tempdir would be scratch-filtered out of the record here.)
     ("cp of two sources into a dir records both landed files",
-     bash("cp a.py b.py src", cwd=CWD), "allow", ["edit"],
+     post(bash("cp a.py b.py src", cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "a.py") + ", " + R(CWD, "src", "b.py")),
     ("cp -t detail names the destination, not the source",
-     bash("cp -t src a.py", cwd=CWD), "allow", ["edit"], R(CWD, "src", "a.py")),
+     post(bash("cp -t src a.py", cwd=CWD)), "allow", ["edit"], R(CWD, "src", "a.py")),
     # --- find -exec: the embedded command is judged; `{}` operands are
     # placeholders, not paths, so the RECORD skips them (the deny above
     # proves judgment still sees them) ---
     ("find -exec cp with a {} placeholder records nothing",
-     bash("find . -name '*.py' -exec cp {} backup/ \\;", cwd=CWD),
+     post(bash("find . -name '*.py' -exec cp {} backup/ \\;", cwd=CWD)),
      "allow", []),
     ("find -exec rm with a {} placeholder records nothing",
-     bash("find . -name '*.tmp' -exec rm {} +", cwd=CWD), "allow", []),
+     post(bash("find . -name '*.tmp' -exec rm {} +", cwd=CWD)), "allow", []),
     # --- csh-form redirect: fd duplication is not a file ---
     (">&2 logs nothing",
-     bash("echo x >&2", cwd=CWD), "allow", []),
+     post(bash("echo x >&2", cwd=CWD)), "allow", []),
     # --- git am is recorded like git apply ---
     ("git am of an ordinary patch logs the patched file",
-     bash("git am " + SRC_PATCH, cwd=CWD), "allow", ["edit"], R(CWD, "src", "app.py")),
+     post(bash("git am " + SRC_PATCH, cwd=CWD)), "allow", ["edit"], R(CWD, "src", "app.py")),
     # --- prefixes: the wrapped command is recorded ---
     ("timeout-wrapped pytest logs exactly one test",
-     bash("timeout 300 pytest -q", cwd=CWD), "allow", ["test"],
+     post(bash("timeout 300 pytest -q", cwd=CWD)), "allow", ["test"],
      "timeout 300 pytest -q"),
     # --- touch value options are not targets ---
     ("touch -r records the stamped file only",
-     bash("touch -r " + SETTINGS + " stamp", cwd=CWD), "allow", ["edit"],
+     post(bash("touch -r " + SETTINGS + " stamp", cwd=CWD)), "allow", ["edit"],
      R(CWD, "stamp")),
     ("touch -d records the touched file, not the date",
-     bash("touch -d '2020-01-01' x", cwd=CWD), "allow", ["edit"], R(CWD, "x")),
+     post(bash("touch -d '2020-01-01' x", cwd=CWD)), "allow", ["edit"], R(CWD, "x")),
     # --- sed's script is a program, not a file ---
     ("sed -i records only the edited file",
-     bash("sed -i 's/x/y/' app.py", cwd=CWD), "allow", ["edit"], R(CWD, "app.py")),
+     post(bash("sed -i 's/x/y/' app.py", cwd=CWD)), "allow", ["edit"], R(CWD, "app.py")),
     # --- heredocs: the body is content ---
     ("heredoc-body mention logs only the real target",
-     bash(HEREDOC_MENTION, cwd=CWD), "allow", ["edit"], R(CWD, "guide.md")),
+     post(bash(HEREDOC_MENTION, cwd=CWD)), "allow", ["edit"], R(CWD, "guide.md")),
     # --- neighbor verbs: benign forms are recorded ---
     ("install into a project dir is recorded",
-     bash("install m.py bin/m.py", cwd=CWD), "allow", ["edit"], R(CWD, "bin", "m.py")),
+     post(bash("install m.py bin/m.py", cwd=CWD)), "allow", ["edit"], R(CWD, "bin", "m.py")),
     ("ln -s records the link name",
-     bash("ln -s ../x.py link.py", cwd=CWD), "allow", ["edit"], R(CWD, "link.py")),
+     post(bash("ln -s ../x.py link.py", cwd=CWD)), "allow", ["edit"], R(CWD, "link.py")),
     ("dd records its of= operand",
-     bash("dd if=disk.img of=backup.img", cwd=CWD), "allow", ["edit"],
+     post(bash("dd if=disk.img of=backup.img", cwd=CWD)), "allow", ["edit"],
      R(CWD, "backup.img")),
     ("dd without of= logs nothing",
-     bash("dd if=disk.img", cwd=CWD), "allow", []),
+     post(bash("dd if=disk.img", cwd=CWD)), "allow", []),
     ("curl -o records the saved file",
-     bash("curl -o page.html https://example.com", cwd=CWD), "allow", ["edit"],
+     post(bash("curl -o page.html https://example.com", cwd=CWD)), "allow", ["edit"],
      R(CWD, "page.html")),
     ("wget -O records the saved file",
-     bash("wget -O out.html https://example.com", cwd=CWD), "allow", ["edit"],
+     post(bash("wget -O out.html https://example.com", cwd=CWD)), "allow", ["edit"],
      R(CWD, "out.html")),
     # --- TEST_RE hardening ---
     ("indented pytest is a test run",
-     bash("  pytest -q", cwd=CWD), "allow", ["test"], "  pytest -q"),
+     post(bash("  pytest -q", cwd=CWD)), "allow", ["test"], "  pytest -q"),
     ("npm run test-e2e is a test run",
-     bash("npm run test-e2e", cwd=CWD), "allow", ["test"], "npm run test-e2e"),
+     post(bash("npm run test-e2e", cwd=CWD)), "allow", ["test"], "npm run test-e2e"),
     ("poetry run pytest is a test run",
-     bash("poetry run pytest", cwd=CWD), "allow", ["test"], "poetry run pytest"),
+     post(bash("poetry run pytest", cwd=CWD)), "allow", ["test"], "poetry run pytest"),
     ("pnpm exec vitest is a test run",
-     bash("pnpm exec vitest run", cwd=CWD), "allow", ["test"], "pnpm exec vitest run"),
+     post(bash("pnpm exec vitest run", cwd=CWD)), "allow", ["test"], "pnpm exec vitest run"),
     ("brace-group pytest is a test run",
-     bash("{ pytest -q; }", cwd=CWD), "allow", ["test"], "{ pytest -q; }"),
+     post(bash("{ pytest -q; }", cwd=CWD)), "allow", ["test"], "{ pytest -q; }"),
     ("tsc-watch is not tsc",
-     bash("tsc-watch src", cwd=CWD), "allow", []),
+     post(bash("tsc-watch src", cwd=CWD)), "allow", []),
     ("a quoted npm test in a commit message is not a test run",
-     bash('git commit -m "fix; npm test"', cwd=CWD), "allow", []),
+     post(bash('git commit -m "fix; npm test"', cwd=CWD)), "allow", []),
     # --- leading cd: judgment follows the directory ---
     ("cd into scratch keeps the write unlogged",
-     bash("cd /tmp && echo x > scratch.txt", cwd=CWD), "allow", []),
+     post(bash("cd /tmp && echo x > scratch.txt", cwd=CWD)), "allow", []),
     ("chained leading cds compound",
-     bash("cd sub && cd sub2 && echo x > f.txt", cwd=CWD), "allow", ["edit"],
+     post(bash("cd sub && cd sub2 && echo x > f.txt", cwd=CWD)), "allow", ["edit"],
      R(CWD, "sub", "sub2", "f.txt")),
     # --- patch records: real stripped paths, resolved, no phantoms ---
     ("patched file is logged by its real stripped path",
-     bash("git apply -p1 " + SRC_PATCH, cwd=CWD), "allow", ["edit"],
+     post(bash("git apply -p1 " + SRC_PATCH, cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py")),
     ("a deletion is logged by the live side of the /dev/null pair",
-     bash("git apply -p1 " + DELETE_PATCH, cwd=CWD), "allow", ["edit"],
+     post(bash("git apply -p1 " + DELETE_PATCH, cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "old.py")),
     ("-p0 strips nothing, so the whole header path is the record",
-     bash("patch -p0 < " + BARE_PATCH, cwd=CWD), "allow", ["edit"],
+     post(bash("patch -p0 < " + BARE_PATCH, cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py")),
     ("git apply with no -p is judged at git's documented -p1",
-     bash("git apply " + SRC_PATCH, cwd=CWD), "allow", ["edit"],
+     post(bash("git apply " + SRC_PATCH, cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py")),
     ("patch with no -p records the fan-out minus a/-phantoms",
-     bash("patch < " + SRC_PATCH, cwd=CWD), "allow", ["edit"],
+     post(bash("patch < " + SRC_PATCH, cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py") + ", " + R(CWD, "app.py")),
     ("a deep header is capped to the two levels real tools use",
-     bash("patch < " + DEEP_PATCH, cwd=CWD), "allow", ["edit"],
+     post(bash("patch < " + DEEP_PATCH, cwd=CWD)), "allow", ["edit"],
      R(CWD, *(_DEEP_PARTS + ["f.py"]))[:120]),
     ("every patch on the line is read, not just the last",
-     bash("git apply -p1 " + SRC_PATCH + " " + SRC2_PATCH, cwd=CWD),
+     post(bash("git apply -p1 " + SRC_PATCH + " " + SRC2_PATCH, cwd=CWD)),
      "allow", ["edit"], R(CWD, "src", "app.py") + ", " + R(CWD, "src", "other.py")),
     ("a rename is logged from its diff --git line, both sides",
-     bash("git apply -p1 " + SRC_RENAME_PATCH, cwd=CWD),
+     post(bash("git apply -p1 " + SRC_RENAME_PATCH, cwd=CWD)),
      "allow", ["edit"], R(CWD, "src", "old.py") + ", " + R(CWD, "src", "new.py")),
     ("a quoted header path is recorded unquoted",
-     bash("git apply -p1 " + QUOTED_RENAME_PATCH, cwd=CWD),
+     pre(bash("git apply -p1 " + QUOTED_RENAME_PATCH, cwd=CWD)),
      "deny", ["deny"], "control:" + R(CWD, ".claude", "hooks", "my file.py")),
     ("a quoted ---/+++ pair is recorded unquoted",
-     bash("git apply -p1 " + QUOTED_PAIR_PATCH, cwd=CWD),
+     post(bash("git apply -p1 " + QUOTED_PAIR_PATCH, cwd=CWD)),
      "allow", ["edit"], R(CWD, "sp file.py")),
     ("a spaced rename records the two paths it moves and no others",
-     bash("git apply -p1 " + SPACED_SRC_RENAME_PATCH, cwd=CWD),
+     post(bash("git apply -p1 " + SPACED_SRC_RENAME_PATCH, cwd=CWD)),
      "allow", ["edit"],
      R(CWD, "src", "my file.py") + ", " + R(CWD, "src", "your file.py")),
     # --- the payload's cwd resolves the record and the judgment ---
     ("relative write in a control cwd is denied with the resolved path",
-     {"tool_name": "Bash", "tool_input": {"command": "echo x > y.py"},
-      "cwd": FAKE_HOOKS_CWD},
+     pre({"tool_name": "Bash", "tool_input": {"command": "echo x > y.py"},
+          "cwd": FAKE_HOOKS_CWD}),
      "deny", ["deny"], "control:" + R(FAKE_HOOKS_CWD, "y.py")),
     ("leading cd is honoured in the denial's path",
-     bash("cd && echo x > .claude/settings.json", cwd=CWD), "deny", ["deny"],
+     pre(bash("cd && echo x > .claude/settings.json", cwd=CWD)), "deny", ["deny"],
      "control:" + R(HOME, ".claude", "settings.json")),
     # --- .env templates ---
     (".env.example is an ordinary edit",
-     edit("Write", ".env.example", cwd=CWD), "allow", ["edit"], R(CWD, ".env.example")),
+     post(edit("Write", ".env.example", cwd=CWD)), "allow", ["edit"], R(CWD, ".env.example")),
     # --- stray << is not a heredoc: what follows must still be judged ---
     ("a quoted << does not eat the command",
-     bash('grep -n "cout <<" a.cpp > r.txt\npytest -q', cwd=CWD),
+     post(bash('grep -n "cout <<" a.cpp > r.txt\npytest -q', cwd=CWD)),
      "allow", ["edit", "test"], R(CWD, "r.txt")),
     ("a single-quoted << does not eat the command",
-     bash("echo 'a << b' > r.txt\npytest -q", cwd=CWD),
+     post(bash("echo 'a << b' > r.txt\npytest -q", cwd=CWD)),
      "allow", ["edit", "test"], R(CWD, "r.txt")),
     ("a << in a comment does not eat the command",
-     bash("# use << for heredocs\npytest -q", cwd=CWD), "allow", ["test"]),
+     post(bash("# use << for heredocs\npytest -q", cwd=CWD)), "allow", ["test"]),
     ("an unterminated heredoc strips nothing that follows",
-     bash("cat <<EOF; echo done\npytest -q", cwd=CWD), "allow", ["test"],
+     post(bash("cat <<EOF; echo done\npytest -q", cwd=CWD)), "allow", ["test"],
      "cat <<EOF; echo done\npytest -q"),
     # --- /usr/bin/time value options are the prefix's, not sources ---
     ("/usr/bin/time -o with no writer logs nothing",
-     bash("/usr/bin/time -o out.txt ls", cwd=CWD), "allow", []),
+     post(bash("/usr/bin/time -o out.txt ls", cwd=CWD)), "allow", []),
     # --- newline separators: judgment follows the line structure ---
     ("newline cd into scratch keeps the write unlogged",
-     bash("cd /tmp\necho x > scratch.txt", cwd=CWD), "allow", []),
+     post(bash("cd /tmp\necho x > scratch.txt", cwd=CWD)), "allow", []),
     ("a quoted newline in a commit message logs nothing",
-     bash('git commit -m "line1\nline2"', cwd=CWD), "allow", []),
+     post(bash('git commit -m "line1\nline2"', cwd=CWD)), "allow", []),
     # --- option values are not sources or destinations ---
     ("install -m mode is not a source",
-     bash("install -m 755 tool.sh bin/tool.sh", cwd=CWD), "allow", ["edit"],
+     post(bash("install -m 755 tool.sh bin/tool.sh", cwd=CWD)), "allow", ["edit"],
      R(CWD, "bin", "tool.sh")),
     ("install -d records the created directory",
-     bash("install -d build/sub", cwd=CWD), "allow", ["edit"], R(CWD, "build", "sub")),
+     post(bash("install -d build/sub", cwd=CWD)), "allow", ["edit"], R(CWD, "build", "sub")),
     ("cp -S suffix is not a source",
-     bash("cp -S .bak x.py y.py", cwd=CWD), "allow", ["edit"], R(CWD, "y.py")),
+     post(bash("cp -S .bak x.py y.py", cwd=CWD)), "allow", ["edit"], R(CWD, "y.py")),
     ("ln -t records the link inside the directory",
-     bash("ln -t src x.py", cwd=CWD), "allow", ["edit"], R(CWD, "src", "x.py")),
+     post(bash("ln -t src x.py", cwd=CWD)), "allow", ["edit"], R(CWD, "src", "x.py")),
     ("ln into `.` does not record the cwd as an edit",
-     bash("ln -s ../x.py .", cwd=CWD), "allow", []),
+     post(bash("ln -s ../x.py .", cwd=CWD)), "allow", []),
     # --- heredoc leftovers are not tee operands ---
     ("tee before a heredoc records only its operand",
-     bash("tee out.txt <<EOF\nx\nEOF", cwd=CWD), "allow", ["edit"], R(CWD, "out.txt")),
+     post(bash("tee out.txt <<EOF\nx\nEOF", cwd=CWD)), "allow", ["edit"], R(CWD, "out.txt")),
     ("a path-shaped heredoc delimiter is not a tee target",
-     bash("tee out.txt <<~/.claude/settings.json\ndata", cwd=CWD),
+     post(bash("tee out.txt <<~/.claude/settings.json\ndata", cwd=CWD)),
      "allow", ["edit"], R(CWD, "out.txt")),
     # --- remove-log false positives ---
     ("git clean -n is a dry run, not a remove",
-     bash("git clean -n", cwd=CWD), "allow", []),
+     post(bash("git clean -n", cwd=CWD)), "allow", []),
     ("git restore --staged touches the index, not the worktree",
-     bash("git restore --staged app.py", cwd=CWD), "allow", []),
+     post(bash("git restore --staged app.py", cwd=CWD)), "allow", []),
     # --- TEST_RE: timeout options, and comments are not commands ---
     ("timeout with -k before the duration is a test run",
-     bash("timeout -k 5 30 pytest", cwd=CWD), "allow", ["test"]),
+     post(bash("timeout -k 5 30 pytest", cwd=CWD)), "allow", ["test"]),
     ("timeout --foreground is a test run",
-     bash("timeout --foreground 30 pytest -q", cwd=CWD), "allow", ["test"]),
+     post(bash("timeout --foreground 30 pytest -q", cwd=CWD)), "allow", ["test"]),
     ("a commented-out npm test is not a test run",
-     bash("# if it fails then npm test again\nls -la", cwd=CWD), "allow", []),
+     post(bash("# if it fails then npm test again\nls -la", cwd=CWD)), "allow", []),
     ("a quoted comment mention is not a test run",
-     bash("echo '# then npm test'", cwd=CWD), "allow", []),
+     post(bash("echo '# then npm test'", cwd=CWD)), "allow", []),
     ("a real pytest after a comment line still logs",
-     bash("# note\npytest -q", cwd=CWD), "allow", ["test"]),
+     post(bash("# note\npytest -q", cwd=CWD)), "allow", ["test"]),
     # --- record sentinels stay sentinels ---
     ("sed -i with no file records the sentinel unresolved",
-     bash("sed -i s/a/b/", cwd=CWD), "allow", ["edit"], "(in-place edit)"),
+     post(bash("sed -i s/a/b/", cwd=CWD)), "allow", ["edit"], "(in-place edit)"),
     ("dd with an empty of= records nothing",
-     bash("dd if=x.img of=", cwd=CWD), "allow", []),
+     post(bash("dd if=x.img of=", cwd=CWD)), "allow", []),
     # --- the a/-b/ phantom drop is for patch fan-outs only ---
     ("a real directory named a/ is recorded",
-     bash("cp x.py a/foo && cp y.py foo", cwd=CWD), "allow", ["edit"],
+     post(bash("cp x.py a/foo && cp y.py foo", cwd=CWD)), "allow", ["edit"],
      R(CWD, "a", "foo") + ", " + R(CWD, "foo")),
 ]
 

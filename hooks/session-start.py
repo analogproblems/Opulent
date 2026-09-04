@@ -62,13 +62,15 @@ keep the lanes for work that earns them. Scale the ceremony to the stakes in bot
 a risky change deserves a lane and a review even when it is small, and a trivial one does not
 acquire risk by being touched directly.
 
-A PreToolUse hook records rather than blocks: main-loop edits and test runs are ALLOWED and
-appended to the log, so what the main loop touched stays visible. Still denied from the main
-loop: the control plane (any `.claude` directory's hooks/, agents/, commands/ or plugins/, the
-settings*.json beside them — the user's AND the project's — plus any .env file, committed
-templates like .env.example excepted), catch-all agents (general-purpose, claude), and this
-session's routing log itself. Subagent calls are allowed and not logged: the record covers the
-main loop only. A plugin's SOURCE repo is ordinary code: edit it directly. Scratch writes under
+The routing hook records rather than blocks: main-loop edits and test runs are ALLOWED, and
+once they have actually run — at PostToolUse, so a call that another hook refused never appears —
+they are appended to the log, so what the main loop touched stays visible. Still denied from the
+main loop: the control plane (any `.claude` directory's hooks/, agents/, commands/ or plugins/ —
+plugins/data/ excepted, that is plugin state, not configuration — the settings*.json beside them
+and another plugin's hook config such as hookkit.json, the user's AND the project's, plus any
+.env file, committed templates like .env.example excepted), catch-all agents (general-purpose,
+claude), and this session's routing log itself. Subagent calls are allowed and not logged: the
+record covers the main loop only. A plugin's SOURCE repo is ordinary code: edit it directly. Scratch writes under
 the system temp dir and ~/.claude/{plans,projects,todos} are allowed and not logged.
 
 Delegation bridge: instructions do not cross the agent boundary on their own. When delegated work

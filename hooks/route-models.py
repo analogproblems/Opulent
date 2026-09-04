@@ -1,9 +1,28 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: guard the control plane, log what the main loop does,
-and keep delegation pointed at real lanes. Subagent calls (payload contains
-agent_id) are always allowed. Fail-open: any parse error or unexpected
-payload shape allows the call. This is a seatbelt with an audit trail, not a
-security boundary — see the README's "Enforcement & Honesty" section.
+"""Routing hook, running on both halves of a tool call. PreToolUse DECIDES:
+guard the control plane, keep delegation pointed at real lanes. PostToolUse
+RECORDS: what the main loop actually did. Subagent calls (payload contains
+agent_id) are always allowed and never recorded. Fail-open: any parse error or
+unexpected payload shape allows the call. This is a seatbelt with an audit
+trail, not a security boundary — see the README's "Enforcement & Honesty"
+section.
+
+The split arrived in 0.20.0, and phantom log lines are why. Other plugins'
+hooks run on the same PreToolUse event, in parallel with this one, and any of
+them can deny: a danger gate refusing `git reset --hard`, a worktree guard
+refusing an Agent call. This hook had already written its `remove` or
+`delegate` line by then — for an action that never ran — and the SessionStart
+telemetry counted it. A record whose stated purpose is "what the main loop
+touched" cannot be a record of what the main loop ATTEMPTED. So the recording
+moved to PostToolUse, which fires only once the tool has SUCCEEDED (a failure
+arrives as PostToolUseFailure, an event this hook does not subscribe to), and
+PreToolUse now writes a line only when it is itself the one refusing — a
+denial IS an outcome, and it is the one outcome this hook owns.
+
+An unknown or missing hook_event_name is treated as PreToolUse: it decides,
+and records nothing. That is the safer of the two mistakes, because a denial
+that should not have happened is visible in the session and a log line that
+should not have happened is not.
 
 Until 0.9.0 this hook denied every main-loop file write and test run, to
 force delegation. That was the wrong instrument for the cost: a one-line
@@ -18,9 +37,10 @@ tree, plus any .env. A plugin's *source* repo is ordinary code — it changes
 nothing until it is installed — and treating it as sacred is what made
 plugin development expensive.
 
-Telemetry: main-loop edits, test runs, removals, delegations and denials each
-append one JSON line to ~/.claude/opulent-log.jsonl (override path with
-OPULENT_LOG). Lines carry the payload's session id (first 8 chars) when one
+Telemetry: main-loop edits, test runs, removals and delegations each append one
+JSON line to ~/.claude/opulent-log.jsonl at PostToolUse (override path with
+OPULENT_LOG); denials and doctor probes append theirs at PreToolUse, where the
+refusal happens. Lines carry the payload's session id (first 8 chars) when one
 was sent, and every path in a detail is recorded resolved and absolute."""
 import datetime
 import json
@@ -72,6 +92,9 @@ def allow(event=None, detail=None):
 
 
 def deny(reason, detail=None, event="deny"):
+    # Hardcoded, not derived from the payload: the recording branch never
+    # reaches this function, so the only event a decision can be announced
+    # against is PreToolUse — the event that is still waiting for one.
     _log(event, detail or reason[:80])
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -208,6 +231,18 @@ _SCRATCH_DIRS = [
 # project's, since both are loaded for the session that is running.
 _CONTROL_SUBDIRS = {"hooks", "agents", "commands", "plugins"}
 _SETTINGS_RE = re.compile(r"^settings(\.[\w-]+)*\.json$")
+# Files that sit DIRECTLY under a `.claude` directory the way settings.json
+# does, and that another plugin's hooks read as their own on/off switches. A
+# file that decides whether some other gate runs governs this session as
+# surely as Claude's own settings do, so it is judged the same way.
+#
+# Enumerated, and it has to stay enumerated: nothing here can tell which JSON
+# files under .claude some hook happens to read, and the tempting
+# generalization — every *.json beside settings.json — takes
+# `.claude/launch.json` with it, which Claude writes itself in ordinary
+# preview use. A guard that fights the harness over the harness's own file
+# costs far more than the accident it prevents.
+_CONTROL_BASENAMES = {"hookkit.json"}
 # .env templates are committed documentation of shape, not secrets. `.envrc`
 # is NOT exempt: direnv executes it as shell.
 _ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
@@ -310,9 +345,11 @@ def _resolve(target, cwd=None):
 def is_control_plane(target, cwd=None):
     """True for files that govern THIS session: anything directly under a
     `.claude` directory's hooks/, agents/, commands/ or plugins/, a
-    settings*.json beside them, or any .env file (committed templates like
-    .env.example excepted). Everything else — including a plugin's source
-    repo, which changes nothing until it is installed — is ordinary code."""
+    settings*.json or a sibling plugin's hook config beside them, or any .env
+    file (committed templates like .env.example excepted). The one carve-out
+    inside plugins/ is data/, which is state rather than configuration — see
+    the loop below. Everything else — including a plugin's source repo, which
+    changes nothing until it is installed — is ordinary code."""
     p = _resolve(target, cwd)
     # Compared case-folded, because the guard has to hold on the platforms the
     # README says it holds on. APFS (the macOS default) and Windows are
@@ -331,7 +368,19 @@ def is_control_plane(target, cwd=None):
         if part != ".claude" or i + 1 >= len(parts):
             continue
         nxt = parts[i + 1]
-        if nxt in _CONTROL_SUBDIRS or _SETTINGS_RE.match(nxt):
+        # `<.claude>/plugins/data/<plugin>/…` is CLAUDE_PLUGIN_DATA, the
+        # documented directory a plugin keeps its own persistent state in —
+        # written BY hooks as they run, not read by them as configuration.
+        # Denying it made every plugin that remembers anything unreadable and
+        # unfixable from the main loop, for no governance gained. The rest of
+        # plugins/ stays control plane: cache/, marketplaces/ and
+        # installed_plugins.json are what decide which plugins load at all.
+        # `continue` rather than `return False`, so a `.claude` directory
+        # nested deeper inside a data dir is still judged on its own.
+        if nxt == "plugins" and parts[i + 2:i + 3] == ["data"]:
+            continue
+        if (nxt in _CONTROL_SUBDIRS or nxt in _CONTROL_BASENAMES
+                or _SETTINGS_RE.match(nxt)):
             return True
     return False
 
@@ -947,7 +996,8 @@ def bash_write_targets(cmd, cwd=None):
 CONTROL_PLANE_DENIAL = (
     "Routing policy: %s is the control plane — a .claude directory's "
     "settings, hooks, agents, commands or plugins (the user's or the "
-    "project's), or a .env. Changing what governs sessions stays delegated, "
+    "project's), another plugin's hook config beside them, or a .env. "
+    "Changing what governs sessions stays delegated, "
     "so every rules change leaves a record: hand it to 'opulent:coder' or "
     "'opulent:mechanic'. A plugin's source repo is not the control plane "
     "and needs no delegation.")
@@ -967,6 +1017,12 @@ def main():
 
     _SID = str(payload.get("session_id") or "")[:8]
 
+    # Which half of the call this is. PostToolUse RECORDS and never decides;
+    # every other event — including an absent or unrecognised one — DECIDES
+    # and records nothing but its own refusal. See the module docstring for
+    # why the record cannot live on the deciding event.
+    recording = payload.get("hook_event_name") == "PostToolUse"
+
     tool = payload.get("tool_name", "")
     tin = payload.get("tool_input") or {}
     cwd = payload.get("cwd") or os.getcwd()
@@ -983,6 +1039,11 @@ def main():
         # treatment a bare int already got for free from _log's own str().
         if not isinstance(st, str):
             st = str(st)
+        if recording:
+            # The spawn happened, whatever it was: a catch-all reaching here
+            # means the denial below was bypassed or the hooks were off, and
+            # the record's job is to say what ran, not to re-argue it.
+            allow("delegate", st)
         if st in CATCHALL_AGENTS:
             deny("Routing policy: catch-all agents inherit the session model and "
                  "bypass lane routing. Delegate to an opulent lane "
@@ -990,7 +1051,6 @@ def main():
                  "opulent:test-runner), the built-in Explore agent for "
                  "read-only search, or another purpose-defined agent "
                  "instead.", "catchall:" + st)
-        _log("delegate", st)
         allow()
 
     if tool in ("Edit", "Write", "NotebookEdit", "MultiEdit"):
@@ -998,13 +1058,19 @@ def main():
         if not path:
             allow()  # no path: nothing to judge, and nothing worth a line
         p = _resolve(path, cwd)
+        if recording:
+            if is_scratch(p, cwd):
+                allow()
+            # A control-plane path is RECORDED here, not refused: by the time
+            # this event fires the write has happened — hooks were off, or the
+            # denial below was bypassed — and an audit line naming it is worth
+            # more than a refusal aimed at the past.
+            allow("edit", p)
         if is_control_plane(p, cwd):
             deny(CONTROL_PLANE_DENIAL % p, "control:" + p)
         if _LOG_GUARDED and p == _LOG_NORM:
             deny(LOG_DENIAL % p, "log:" + p)
-        if is_scratch(p, cwd):
-            allow()
-        allow("edit", p)
+        allow()
 
     if tool == "Bash":
         cmd = tin.get("command", "")
@@ -1012,30 +1078,34 @@ def main():
         if parsed is None:
             # An unbalanced quote must not silently blind the record: one
             # line says the parser saw nothing, and the test check still
-            # runs against the raw text.
-            _log("unparsed", cmd[:80])
-            if TEST_RE.search(cmd):
-                _log("test", cmd[:80])
+            # runs against the raw text. Nothing can be judged either, so the
+            # deciding half has nothing at all to say about this command.
+            if recording:
+                _log("unparsed", cmd[:80])
+                if TEST_RE.search(cmd):
+                    _log("test", cmd[:80])
             allow()
         targets, moves, removed, git_rm, patch_derived, eff_cwd = parsed
         # The sed sentinel is a marker, not a path — resolving it painted it
         # under the cwd in the record.
         pairs = [(t, t if t == "(in-place edit)" else _resolve(t, eff_cwd))
                  for t in targets]
-        for t, rp in pairs:
-            if os.path.basename(rp) == CANARY:
-                deny("Routing policy: the /opulent:doctor canary (%s), denied on "
-                     "purpose — enforcement is live and nothing was written."
-                     % CANARY, "canary:" + rp, event="probe")
-            if _LOG_GUARDED and rp == _LOG_NORM:
-                deny(LOG_DENIAL % rp, "log:" + rp)
-            if is_control_plane(rp, eff_cwd):
-                deny(CONTROL_PLANE_DENIAL % rp, "control:" + rp)
         rm_pairs = [(p, _resolve(p, eff_cwd)) for p in removed]
-        for p, rp in rm_pairs:
-            if _LOG_GUARDED and rp == _LOG_NORM:
-                deny(LOG_DENIAL % rp, "log:" + rp)
-        # The record, after judgment: scratch stays out, an mv is shown as
+        if not recording:
+            for t, rp in pairs:
+                if os.path.basename(rp) == CANARY:
+                    deny("Routing policy: the /opulent:doctor canary (%s), denied "
+                         "on purpose — enforcement is live and nothing was "
+                         "written." % CANARY, "canary:" + rp, event="probe")
+                if _LOG_GUARDED and rp == _LOG_NORM:
+                    deny(LOG_DENIAL % rp, "log:" + rp)
+                if is_control_plane(rp, eff_cwd):
+                    deny(CONTROL_PLANE_DENIAL % rp, "control:" + rp)
+            for p, rp in rm_pairs:
+                if _LOG_GUARDED and rp == _LOG_NORM:
+                    deny(LOG_DENIAL % rp, "log:" + rp)
+            allow()
+        # The record, after the fact: scratch stays out, an mv is shown as
         # the move it is, `{}` operands are find's placeholder rather than a
         # path, and a patch fan-out's a/- and b/-prefixed spellings are
         # dropped once their stripped sibling is present — phantoms in the

@@ -11,6 +11,17 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit|MultiEdit|Bash|Task|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/route-models.py\" || python \"${CLAUDE_PLUGIN_ROOT}/hooks/route-models.py\""
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
