@@ -10,6 +10,41 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.24.0 — 2026-09-07
+
+**The hooks run, and are tested, on every platform Claude Code runs on.** CI
+ran on `ubuntu-latest` only, and the first time the hook self-test ran on
+Windows it scored 239 of 328. It is now 357 of 357 there, and the workflow is a
+matrix of ubuntu, windows and macos with no encoding crutch in the environment.
+
+**Most of the 89 were the fixtures, not the hook.** They spliced Windows paths
+into Bash commands unquoted, and the hook parsed them the way Git Bash does: an
+unquoted backslash is an escape, so `C:\Users\…\.claude\settings.json` is not
+a control-plane path — it is not a path Bash can reach at all. The hook's
+reading stands. The fixtures now quote what a working command would quote, and
+a new case pins the semantics so nobody "fixes" them back.
+
+**Three were real.** A `cd /tmp` lost its POSIX meaning once Windows normpath
+turned the stored cwd into `\tmp`; the routing log's self-guard did not
+recognise the MSYS spelling `/c/Users/…` that Git Bash users actually type; and
+`OPULENT_LOG=nul` — "no log" on Windows — was joined onto HOME and guarded. All
+three are fixed, each with the case that was red before.
+
+**The PowerShell tool was not guarded at all.** On Windows the harness offers
+PowerShell as its primary shell, and the hook matched only `Bash`, so nothing
+run through it was denied or recorded. It is matched now, conservatively and
+honestly: a command that names a control-plane path is denied; a command that
+looks like it writes is recorded as `unparsed`, the vocabulary's own word for a
+write the parser could not read; and the test-run recogniser, which is textual,
+logs `cargo test` from either shell. There is no PowerShell parser, and the log
+does not pretend there is. The doctor gains a PowerShell canary, so an
+installed `hooks.json` older than this release reads PARTIAL instead of passing.
+
+Also: `encoding="utf-8"` on every text open in hooks and tests (a cp1252
+console could not read the em dash in this file), a `.gitattributes` so LF no
+longer rests on `core.autocrlf`, and one shared constant for the canary denial
+text, because the doctor reads it and two copies would drift.
+
 ## opulent 0.23.0 — 2026-09-07
 
 **Review becomes a lane.** Until now the one judgment call the policy did not
