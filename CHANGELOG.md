@@ -33,11 +33,13 @@ three are fixed, each with the case that was red before.
 **The PowerShell tool was not guarded at all.** On Windows the harness offers
 PowerShell as its primary shell, and the hook matched only `Bash`, so nothing
 run through it was denied or recorded. It is matched now, conservatively and
-honestly: a command that names a control-plane path is denied; a command that
-looks like it writes is recorded as `unparsed`, the vocabulary's own word for a
-write the parser could not read; and the test-run recogniser, which is textual,
-logs `cargo test` from either shell. There is no PowerShell parser, and the log
-does not pretend there is. The doctor gains a PowerShell canary, so an
+honestly: a command whose text names a control-plane path is denied — as one
+literal, or as `.claude` and a control-plane name together in a write-shaped
+command; a path built from a variable set earlier is beyond it, as it is beyond
+the Bash guard; a command that looks like it writes is recorded as `unparsed`,
+the vocabulary's own word for a write the parser could not read; and the
+test-run recogniser, which is textual, logs `cargo test` from either shell.
+There is no PowerShell parser, and the log does not pretend there is. The doctor gains a PowerShell canary, so an
 installed `hooks.json` older than this release reads PARTIAL instead of passing.
 
 Also: `encoding="utf-8"` on every text open in hooks and tests (a cp1252

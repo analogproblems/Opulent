@@ -34,8 +34,9 @@ control plane is refused.
 Two shells reach the filesystem, and they are judged differently on purpose.
 Bash is parsed (shlex, below). PowerShell — the primary shell the harness
 offers on Windows — is not: it is refused when its TEXT names a control-plane
-path, and otherwise recorded as `unparsed` when it looks like it writes. See
-the block comment above _PS_WRITE_TOKENS.
+path — as a literal, or as co-occurring literals in a write-shaped command;
+never through a variable — and otherwise recorded as `unparsed` when it looks
+like it writes. See the block comment above _PS_WRITE_TOKENS.
 
 The control plane is what governs the session that is running right now:
 settings, hooks, agent and command definitions, and the installed plugin
@@ -1051,8 +1052,12 @@ def bash_write_targets(cmd, cwd=None):
 #
 # It DECIDES on text: every token that could be a path is run through the same
 # is_control_plane and log-guard rules a Bash target is, so a command naming
-# the control plane is refused whether or not we could tell it was writing.
-# Over-refusing is the direction that costs a delegation and names the path it
+# the control plane AS ONE LITERAL is refused whether or not we could tell it
+# was writing. A write-shaped command that spells the same path out of
+# SEPARATE literals is refused too — see the co-occurrence block above
+# _ps_cooccurring_control, which is where the honest limit of a text-level
+# guard is written down. Neither rule reads a variable.
+# Over-refusing is the direction that costs a delegation and names what it
 # objected to; under-refusing is the direction that costs the guarantee.
 #
 # It RECORDS as `unparsed`: a command carrying any write-shaped token gets one
@@ -1067,19 +1072,34 @@ _PS_WRITE_TOKENS = ("out-file", "set-content", "add-content", "copy-item",
                     "tee-object", "-outfile")
 # Tokens, with quoted spans kept whole so a quoted path stays one candidate.
 _PS_TOKEN_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"|([^\s'\"]+)")
+# Atoms, for the co-occurrence rule below: every run of name characters in the
+# command, so `.claude` is seen whether it arrives as its own token, as a
+# quoted string, as one path segment, or as one word inside a longer string.
+# Dots, hyphens and underscores stay INSIDE an atom, which is what keeps
+# `settings.local.json` and `opulent-log.jsonl` whole — and keeps `my.claude`
+# from being read as `.claude`.
+_PS_ATOM_SPLIT_RE = re.compile(r"[^A-Za-z0-9_.\-]+")
 # The log's own basename, so a relatively-spelled OPULENT_LOG is still
 # recognised by _ps_pathish below (an absolute one always carries a separator).
 _LOG_BASE = posixpath.basename(_LOG_NORM.replace("\\", "/")).lower()
 
 
-def _powershell_tokens(cmd):
-    """A PowerShell command's tokens, with the spellings it writes paths in
-    normalised: $HOME and $env:USERPROFILE expanded textually, and backslashes
-    turned into forward slashes so one segment scan reads
+def _ps_text(cmd):
+    """A PowerShell command with the spellings it writes paths in normalised:
+    $HOME and $env:USERPROFILE expanded textually, and backslashes turned into
+    forward slashes so one segment scan reads
     `C:\\Users\\x\\.claude\\hooks` and `C:/Users/x/.claude/hooks` alike. `~` is
-    left to _resolve, which already expands it."""
+    left to _resolve, which already expands it. Shared by the tokenizer and
+    the co-occurrence rule, so the two can never disagree about what the
+    command says."""
     text = cmd.replace("$env:USERPROFILE", HOME).replace("$HOME", HOME)
-    text = text.replace("\\", "/")
+    return text.replace("\\", "/")
+
+
+def _powershell_tokens(cmd):
+    """A PowerShell command's tokens over that normalised text, with quoted
+    spans kept whole so a quoted path stays one candidate."""
+    text = _ps_text(cmd)
     out = []
     for m in _PS_TOKEN_RE.finditer(text):
         tok = next((g for g in m.groups() if g is not None), "")
@@ -1090,16 +1110,28 @@ def _powershell_tokens(cmd):
 
 def _ps_pathish(tok):
     """Whether a token is worth resolving as a path. One carrying a separator
-    always is; a bare name only when its BASENAME is what the rules judge — a
-    .env file, a settings*.json, a sibling plugin's hook config, the routing
-    log. Without the filter, a PowerShell session whose cwd sat inside
-    .claude/hooks would resolve every bare word (`Get-ChildItem` included)
-    into the control plane and be refused for saying hello."""
+    always is; a bare name only when the NAME ITSELF is what the rules judge —
+    a .env file, a settings*.json, a sibling plugin's hook config, the routing
+    log, or one of the control-plane directory names (_CONTROL_SUBDIRS, plus
+    `.claude` itself). Without the filter, a PowerShell session whose cwd sat
+    inside .claude/hooks would resolve every bare word (`Get-ChildItem`
+    included) into the control plane and be refused for saying hello.
+
+    The directory names were missing when this branch shipped, and their
+    absence was a hole rather than a nicety: `Remove-Item hooks -Recurse
+    -Force` from a session sitting in ~/.claude never resolved its one
+    operand, so the control plane could be deleted by a command that named it
+    plainly. Note what this does NOT reach — `.claude` resolves to the
+    directory itself, and is_control_plane judges what is UNDER a .claude
+    directory, so a command naming only the directory is allowed here exactly
+    as `rm -rf ~/.claude` is allowed on the Bash side. Same rule, both
+    shells."""
     if "/" in tok:
         return True
     low = tok.lower()
     return (low.startswith(".env") or bool(_SETTINGS_RE.match(low))
-            or low in _CONTROL_BASENAMES
+            or low in _CONTROL_BASENAMES or low in _CONTROL_SUBDIRS
+            or low == ".claude"
             or (_LOG_GUARDED and low == _LOG_BASE))
 
 
@@ -1107,9 +1139,78 @@ def _ps_writes(cmd):
     """Whether a PowerShell command carries a write-shaped token: a `>`/`>>`
     redirect, or one of the cmdlets that create, overwrite, move or delete.
     Matched case-insensitively against the raw text — a mention inside a
-    string counts, which is the cheap half of the trade described above."""
+    string counts, which is the cheap half of the trade described above.
+
+    Deliberately asymmetric with the TEST_RE probe below, which blanks quoted
+    spans BEFORE looking. Not an oversight, and not to be "fixed" toward the
+    probe's spelling: reading a quoted mention as a write costs an `unparsed`
+    line, arms the canary check, and lets the co-occurrence rule refuse a
+    command that also names the control plane in a string — all three the
+    cheap direction. Blanking quotes first would be the expensive one, because
+    a write really can be spelled through a quoted cmdlet name."""
     low = cmd.lower()
     return ">" in cmd or any(t in low for t in _PS_WRITE_TOKENS)
+
+
+def _ps_names(cmd):
+    """Every name-shaped atom in a command, lowercased — its own tokens, the
+    contents of its quoted strings, and the segments of its paths, which after
+    _ps_text are all just runs of name characters."""
+    return set(a.lower() for a in _PS_ATOM_SPLIT_RE.split(_ps_text(cmd)) if a)
+
+
+# The co-occurrence rule, and the honest limit it draws.
+#
+# A flat tokenizer can judge only what is written down as one piece.
+# `$dir = Join-Path $HOME ".claude" "hooks"` followed by `Set-Content -Path
+# (Join-Path $dir "evil.py")` never produces a single resolvable token, so the
+# per-token pass above sees nothing to refuse — a full bypass of this branch,
+# reachable by ordinary non-adversarial path-building, and measured as
+# allowed. Plain `+` concatenation split across tokens does the same.
+#
+# Evaluating PowerShell is still not the answer; half a parser reports a
+# confidence it does not have. CO-OCCURRENCE is: a WRITE-shaped command whose
+# text names `.claude` and a control-plane name TOGETHER is refused, however
+# the two are joined. That covers Join-Path (quoted or bare), `+`
+# concatenation, and -LiteralPath/-Destination/-OutFile fed by such literals,
+# because in every one of them the literals are still in the text.
+#
+# It is the strongest claim a text-level guard can make without a parser, and
+# it stops exactly where the Bash guard stops: a destination built from a
+# variable assigned in an EARLIER tool call is beyond both — `d=~/.claude/hooks;
+# cp x "$d/y"` is allowed by the Bash branch too, measured, not assumed — and
+# the README says so rather than implying parity.
+#
+# Write-shaped only. A `Get-Content` that mentions both is a read, and
+# refusing reads on a word count would cost far more than it buys. The price
+# of the rule is the other way round: a write that mentions both words in
+# prose is refused (`Set-Content notes.md -Value "see .claude and hooks"`),
+# which costs one retry with a different phrasing. A seatbelt takes that
+# trade; a guarantee that folds to `Join-Path` does not.
+def _ps_cooccurring_control(cmd):
+    """The control-plane literal a write-shaped command names alongside a
+    literal `.claude`, or None. The name sets are is_control_plane's own, so
+    the two cannot drift; the order is fixed so the denial names the same
+    literal every time."""
+    names = _ps_names(cmd)
+    if ".claude" not in names:
+        return None
+    for sub in sorted(_CONTROL_SUBDIRS - {"plugins"}):
+        if sub in names:
+            return sub
+    # plugins/data is CLAUDE_PLUGIN_DATA — a plugin's own state, not rules.
+    # is_control_plane carves it out of the resolved path; the same carve-out
+    # is made here for the literals, so a write into a plugin's data dir built
+    # from Join-Path is allowed exactly as the spelled-out path is.
+    if "plugins" in names and "data" not in names:
+        return "plugins"
+    for n in sorted(names):
+        if (n in _CONTROL_BASENAMES or _SETTINGS_RE.match(n)
+                or (n.startswith(".env")
+                    and not n.endswith(_ENV_TEMPLATE_SUFFIXES))
+                or (_LOG_GUARDED and n == _LOG_BASE)):
+            return n
+    return None
 
 
 CONTROL_PLANE_DENIAL = (
@@ -1287,6 +1388,14 @@ def main():
                     deny(LOG_DENIAL % rp, "log:" + rp)
                 if is_control_plane(rp, cwd):
                     deny(CONTROL_PLANE_DENIAL % rp, "control:" + rp)
+            # After the per-token pass, never before it: a token that resolves
+            # gives a denial naming the actual path, which is the more
+            # actionable of the two messages.
+            lit = _ps_cooccurring_control(cmd) if writes else None
+            if lit:
+                spelled = ('a path spelled out of the literals ".claude" and '
+                           '"%s" in this write-shaped command' % lit)
+                deny(CONTROL_PLANE_DENIAL % spelled, "control:.claude+" + lit)
             allow()
         if writes:
             _log("unparsed", "powershell: " + cmd[:80])

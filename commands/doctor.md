@@ -39,8 +39,10 @@ failed.
 
 4b. **PowerShell (Windows only).** Where the harness offers a `PowerShell` tool, run the same
     probe through it: `New-Item opulent-doctor-canary`. Denied with an Opulent message → the
-    PowerShell path is guarded (0.24.0+). Succeeds → clean up (`Remove-Item
-    opulent-doctor-canary`) and the verdict is PARTIAL: Bash guarded, PowerShell open — an
+    PowerShell path is guarded (0.24.0+). That proves the branch is wired, not that it reads
+    PowerShell — it is a text-level guard (see README), and the canary cannot tell the
+    difference. Succeeds → clean up (`Remove-Item opulent-doctor-canary`) and the verdict is
+    PARTIAL: Bash guarded, PowerShell open — an
     installed `hooks.json` older than 0.24.0. Skip this step where there is no PowerShell tool
     and say so; do not run it through Bash.
 

@@ -248,6 +248,12 @@ os.makedirs(os.path.join(DEST_PROJ, "src"))
 # A cwd that sits inside a control-plane directory: a RELATIVE write there
 # must be judged against the payload's cwd, not the hook process's.
 FAKE_HOOKS_CWD = os.path.join(PATCH_DIR, "fake", ".claude", "hooks")
+# Its two neighbours, for the PowerShell rows below: the `.claude` directory a
+# session can sit directly in, and an ordinary project beside it. Never
+# created on disk, like FAKE_HOOKS_CWD — nothing in the judged path touches
+# the filesystem.
+FAKE_CLAUDE_CWD = os.path.dirname(FAKE_HOOKS_CWD)
+FAKE_PROJ_CWD = os.path.join(PATCH_DIR, "fake", "project")
 
 # Patches name their targets inside the file, so these are the only place the
 # hook can learn what `patch` and `git apply` are about to write.
@@ -718,6 +724,79 @@ CASES = [
      powershell("Set-Content " + q(SETTINGS) + " -Value x", "a1", cwd=CWD),             "allow"),
     ("PostToolUse PowerShell control plane is not denied",
      post(powershell("Set-Content " + q(SETTINGS) + " -Value x", cwd=CWD)),             "allow"),
+    # --- PowerShell: a path spelled out of SEPARATE literals ---
+    # The per-token pass sees one token at a time, so `Join-Path $HOME
+    # ".claude" "hooks"` hands it no resolvable path at all: measured ALLOWED
+    # against the branch as first shipped, by ordinary non-adversarial
+    # path-building, which made the whole control-plane check optional on
+    # Windows. The co-occurrence rule refuses these — write-shaped, and every
+    # literal is still in the text. See _ps_cooccurring_control.
+    ("PowerShell Join-Path-built control-plane destination is denied",
+     powershell('$dir = Join-Path $HOME ".claude" "hooks"\n'
+                'Set-Content -Path (Join-Path $dir "evil.py") -Value "pwned"',
+                cwd=CWD),                                                               "deny"),
+    ("PowerShell concatenation-built control-plane destination is denied",
+     powershell('Set-Content -Path ($HOME + ".claude" + "hooks\\evil.py") '
+                '-Value "pwned"', cwd=CWD),                                             "deny"),
+    ("PowerShell -Destination built from literals is denied",
+     powershell('Copy-Item x -Destination (Join-Path $HOME ".claude" "agents")',
+                cwd=CWD),                                                               "deny"),
+    # One contiguous literal, which the per-token pass already caught — pinned
+    # so the co-occurrence rule cannot be "simplified" into replacing it.
+    ("PowerShell -LiteralPath naming settings.json is denied",
+     powershell('Set-Content -LiteralPath "$HOME\\.claude\\settings.json" -Value x',
+                cwd=CWD),                                                               "deny"),
+    # --- PowerShell: bare control-plane directory names resolve too ---
+    # _ps_pathish enumerated only BASENAMES the rules judge, so a bare
+    # directory name was never resolved: a session sitting in ~/.claude could
+    # delete hooks/ by naming it plainly. Measured allowed.
+    ("PowerShell Remove-Item of a bare hooks/ in a .claude cwd is denied",
+     powershell("Remove-Item hooks -Recurse -Force", cwd=FAKE_CLAUDE_CWD),              "deny"),
+    # And the per-token rule is not write-gated, which is this branch's stated
+    # design: a command NAMING the control plane is refused whether or not we
+    # could tell it was writing. So a bare `hooks` resolving into a .claude
+    # cwd is refused even with no write shape at all — the same answer Bash
+    # gives `echo x > y.py` from inside hooks/. Over-refusing costs a rephrase
+    # and names what it objected to.
+    ("PowerShell Write-Output of a bare hooks/ in a .claude cwd is denied",
+     powershell('Write-Output "hooks"', cwd=FAKE_CLAUDE_CWD),                           "deny"),
+    # --- co-occurrence is WRITE-shaped only, and keeps the plugins/data carve-out ---
+    ("PowerShell Get-Content of a literal-built control-plane path is allowed",
+     powershell('Get-Content (Join-Path $HOME ".claude" "hooks" "x.py")', cwd=CWD),     "allow"),
+    ("PowerShell Set-Content into literal-built plugins/data is allowed",
+     powershell('Set-Content (Join-Path $HOME ".claude" "plugins" "data" '
+                '"state.json") -Value x', cwd=CWD),                                     "allow"),
+    # The price of a text-level rule, paid out loud rather than papered over:
+    # two words inside ONE prose string are indistinguishable from the two
+    # literals a path is built from, because there is no parser here to say
+    # otherwise. A false deny costs one retry with a different phrasing; the
+    # alternative costs the guarantee, since every bypass above is spelled
+    # with literals too. The seatbelt takes that trade.
+    ("PowerShell prose naming .claude and hooks in a write is denied",
+     powershell('Set-Content notes.md -Value "see .claude and hooks in the docs"',
+                cwd=CWD),                                                               "deny"),
+    # --- KNOWN GAPS, pinned at what the code actually does ---
+    # Both were reported as PowerShell-vs-Bash asymmetries; both survive the
+    # fixes above, for reasons that do not live in the PowerShell branch.
+    #
+    # 1. is_control_plane judges what sits UNDER a .claude directory, so a
+    #    path ENDING at .claude is not the control plane on EITHER shell —
+    #    `rm -rf ~/.claude` is allowed by the Bash branch too (measured, not
+    #    assumed). Closing it means changing is_control_plane, which moves
+    #    both shells at once and is not a PowerShell fix.
+    ("PowerShell Remove-Item of .claude itself is allowed, exactly as in Bash",
+     powershell("Remove-Item .claude -Recurse -Force", cwd=FAKE_PROJ_CWD),              "allow"),
+    # 2. A bare `y.py` is path-ish under none of the rules, so a write whose
+    #    CWD is the control plane is judged on a text naming none of it. Bash
+    #    catches the mirror row above only because its parser knows `y.py` is
+    #    a redirect TARGET and resolves it against the payload's cwd. Closing
+    #    this needs a rule the co-occurrence one deliberately is not — roughly
+    #    `if writes and is_control_plane(cwd, cwd): deny(...)`, one line, and
+    #    the "Get-ChildItem in a control-plane cwd" row above would stay green
+    #    because it carries no write shape. It is a new rule either way, and
+    #    whose call that is does not belong to this suite.
+    ("PowerShell relative write in a control-plane cwd is NOT caught (gap)",
+     powershell("Set-Content y.py -Value x", cwd=FAKE_HOOKS_CWD),                       "allow"),
     # --- delegation routing: unchanged, this was never the lockout ---
     ("main Task->Explore allowed",   task("Explore"),                                   "allow"),
     ("main Agent->Explore allowed",  {"tool_name": "Agent",
@@ -1189,6 +1268,22 @@ TELEMETRY = [
     ("the PowerShell canary is denied and logged as a probe",
      pre(powershell("New-Item opulent-doctor-canary", cwd=CWD)), "deny", ["probe"],
      "canary:" + R(CWD, "opulent-doctor-canary")),
+    # The co-occurrence denial is a `deny` like every other one — no sixth
+    # event name — and its detail names the LITERALS, because there is no
+    # resolved path to name: only PowerShell knows what they join into.
+    ("a co-occurrence denial logs exactly one deny, naming the literals",
+     pre(powershell('$dir = Join-Path $HOME ".claude" "hooks"\n'
+                    'Set-Content -Path (Join-Path $dir "evil.py") -Value "x"',
+                    cwd=CWD)), "deny", ["deny"], "control:.claude+hooks"),
+    # The two allow-shaped halves of the same rule, on the recording event:
+    # a literal-built write into plugins/data is one `unparsed` and no denial,
+    # and a literal-built READ of the control plane records nothing at all.
+    ("a literal-built plugins/data write records exactly one unparsed",
+     post(powershell('Set-Content (Join-Path $HOME ".claude" "plugins" "data" '
+                     '"state.json") -Value x', cwd=CWD)), "allow", ["unparsed"]),
+    ("a literal-built control-plane read records nothing",
+     post(powershell('Get-Content (Join-Path $HOME ".claude" "hooks" "x.py")',
+                     cwd=CWD)), "allow", []),
 ]
 
 for case in TELEMETRY:
@@ -1366,16 +1461,31 @@ extra("an unquoted backslash path is never recorded as a .claude path",
 # observable half of the bug is that false denial — a line written to ~/nul
 # goes to the null device on Windows, so "nothing was logged" is not something
 # any check can see from outside.
-_devnull_env = {"OPULENT_LOG": os.devnull}
-got = run(bash("echo x > /dev/null", cwd=CWD), _devnull_env)
-extra("a redirect to /dev/null is allowed when os.devnull IS the log",
-      got == "allow", "allow", got)
-# The path the anchor-to-HOME step used to invent, written the way a Bash
-# command would: with the fix in place there is no log here to guard.
-_devnull_under_home = os.path.join(HOME, os.devnull)
-got = run(bash("echo x > " + q(_devnull_under_home), cwd=CWD), _devnull_env)
-extra("os.devnull as the log guards nothing under HOME",
-      got == "allow", "allow", got)
+#
+# Windows-only, and skipped out loud elsewhere: the bug is the anchor-to-HOME
+# step firing on a devnull spelling that is not ABSOLUTE, and `nul` is that
+# spelling only here. On POSIX os.devnull is "/dev/null", already absolute and
+# already excluded before the fix — so both rows pass there even against the
+# pre-fix hook, and counting them on the Linux and macOS legs of the new
+# 3-OS matrix would report coverage those legs do not have.
+if sys.platform == "win32":
+    _devnull_env = {"OPULENT_LOG": os.devnull}
+    got = run(bash("echo x > /dev/null", cwd=CWD), _devnull_env)
+    extra("a redirect to /dev/null is allowed when os.devnull IS the log",
+          got == "allow", "allow", got)
+    # The path the anchor-to-HOME step used to invent, written the way a Bash
+    # command would: with the fix in place there is no log here to guard.
+    _devnull_under_home = os.path.join(HOME, os.devnull)
+    got = run(bash("echo x > " + q(_devnull_under_home), cwd=CWD), _devnull_env)
+    extra("os.devnull as the log guards nothing under HOME",
+          got == "allow", "allow", got)
+else:
+    print(f"SKIP  a redirect to /dev/null is allowed when os.devnull IS the "
+          f"log: {os.devnull} is already absolute on {sys.platform}, so the "
+          f"anchor-to-HOME step this pins cannot fire")
+    print(f"SKIP  os.devnull as the log guards nothing under HOME: same "
+          f"reason — there is no non-absolute devnull spelling on "
+          f"{sys.platform}")
 
 # --- the log self-guard reaches MSYS's drive spelling (Windows only). In Git
 # Bash `/c/Users/...` IS `C:\Users\...`, and it is the spelling that shell
