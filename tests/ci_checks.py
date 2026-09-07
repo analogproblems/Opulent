@@ -398,6 +398,7 @@ print("session-start names the log path even before any activity")
 PR_LANE_BASELINE = "13316c0"     # the last commit before pr-lane existed
 pr_ns = hook_namespace("hooks/pr_lane.py")
 MARKER = constant(pr_ns, "MARKER", "hooks/pr_lane.py")
+_block_lines = constant(pr_ns, "_BLOCK_LINES", "hooks/pr_lane.py")
 
 
 def session_context(cwd, hook_path=None):
@@ -494,11 +495,12 @@ try:
             "what a session is told about routing")
     block = withcfg[len(plain):]
     lines = block.strip("\n").split("\n")
-    if len(lines) > 40:
+    if len(lines) > _block_lines:
         raise SystemExit(
             f"session-start: the pr-lane block is {len(lines)} lines, over the "
-            f"40-line budget — it shares a context window with the routing "
-            f"policy, and there is no rung above 'the model stopped reading'")
+            f"{_block_lines}-line budget — it shares a context window with the "
+            f"routing policy, and there is no rung above 'the model stopped "
+            f"reading'")
     if MARKER not in block:
         raise SystemExit(
             f"session-start: the pr-lane block never carries {MARKER!r} — the "
@@ -698,7 +700,7 @@ if _summary([], now=NOW) != "pr-lane: ledger empty":
     raise SystemExit("hooks/pr_lane.py: an empty ledger must render "
                      "'pr-lane: ledger empty', not a zero-count line")
 # The name lists are bounded, and say how many they left out. Without this the
-# 40-line budget bounds nothing: two hundred units in flight is ONE line.
+# line budget bounds nothing: two hundred units in flight is ONE line.
 many = [{"t": at(1), "unit": "u%02d" % i, "event": "coded"}
         for i in range(_summary_names + 5)]
 crowded = _summary(many, now=NOW)
@@ -758,6 +760,27 @@ if "\nEVIL:" in fat:
         f"own text:\n{fat}")
 print(f"hooks/pr_lane.py: the policy block holds its {_block_bytes}-byte "
       f"budget and its config values stay one line each")
+
+# The review ladder is policy text, not a config-driven field, so it has to
+# reach a session over the config a new user actually pastes — README.md's
+# own example — and not only over the hand-written fixtures above.
+_readme_section = readme_text.split("## \U0001f9f5 pr-lane", 1)[1].split(
+    "\n---\n", 1)[0]
+_readme_config = _readme_section.split("```json\n", 1)[1].split(
+    "\n```", 1)[0]
+json.loads(_readme_config)      # fails loudly if the fence ever drifts
+_root = pr_lane_project(_readme_config)
+try:
+    readme_block = _policy_block(_root, now=NOW)
+finally:
+    shutil.rmtree(_root, True)
+if "Review ladder — recorded, never enforced" not in readme_block:
+    raise SystemExit(
+        "hooks/pr_lane.py: the policy block rendered from README.md's own "
+        "example config never says 'Review ladder — recorded, never "
+        f"enforced':\n{readme_block}")
+print("hooks/pr_lane.py: the policy block carries the review ladder over "
+      "README.md's own example config")
 
 # Reading a tool response is LINEAR in its size. The budget check used to
 # re-join everything it had collected at every string it found, which is

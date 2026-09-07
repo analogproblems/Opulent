@@ -80,10 +80,14 @@ _STALE_DAYS = 30
 # line shares a context window with the routing policy, and forty unit ids
 # spent on one part is the whole budget.
 _SUMMARY_NAMES = 6
-# The rendered policy block's byte budget. The 40-line budget CI pins bounds
-# the wrong dimension on its own: a two-hundred-unit summary is one 2 KB line
-# and passes it.
-_BLOCK_BYTES = 3 * 1024
+# The rendered policy block's line budget. It shares a context window with
+# the routing policy above it, and there is no rung above "the model stopped
+# reading".
+_BLOCK_LINES = 48
+# The rendered policy block's byte budget. The 48-line budget above pins
+# bounds the wrong dimension on its own: a two-hundred-unit summary is one
+# 2 KB line and passes it.
+_BLOCK_BYTES = 4 * 1024
 _TRUNCATED = ("pr-lane: the block hit its %d KiB budget and was cut here."
               % (_BLOCK_BYTES // 1024))
 # How much of the ledger one render reads, in lines — the same posture
@@ -424,6 +428,12 @@ def policy_block(project, now=None):
         "merges it whatever the setting above says. Never commit %s."
         % _field(cfg.get("git", "never_commit"), "nothing in particular"),
         "Documentation and browser verification stay with you, per the routing policy above.",
+        "",
+        "Review ladder — recorded, never enforced: one full review per unit; a second only if the first",
+        "came back NOT SAFE, and only on the delta; never a third. After that, run the reviewer's own probe",
+        "cases yourself, let CI decide, merge or hand off, and put what is left in the PR body. A review",
+        "brief carries the unit's `unit:` line so the ledger can count its rounds; the ledger shows what",
+        "you did, and that record is the whole mechanism.",
         "",
         "Paste this contract VERBATIM into every implementation brief; the marker line is how a "
         "reader knows it was.",

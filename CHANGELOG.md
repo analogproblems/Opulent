@@ -10,6 +10,22 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.25.1 — 2026-09-07
+
+**The review ladder, recorded and not enforced.** Two review rounds on one
+change each found real bugs and each cost as much as the fix that followed;
+a reviewer that always finds something will always justify another round, so
+termination has to be a rule rather than a judgment made mid-loop. The
+pr-lane policy block now states the ladder — one full review per unit, a
+second only after NOT SAFE and only on the delta, never a third, then the
+architect's own probes and CI — and asks review briefs to carry the unit's
+`unit:` line so the ledger can count rounds. Nothing denies a third review.
+The owner's call was to watch the record first: if the ledger shows the
+ladder holding on its own, a gate would be ceremony; if it shows a third
+round anyway, the gate has its evidence. The block's budgets grow to 48 lines
+and 4 KiB to make room, which also clears the 0.25.0 residual where the
+README's own example config sat 135 bytes from the limit.
+
 ## opulent 0.25.0 — 2026-09-07
 
 **A PR lane, opt-in, and in phase 1 it records.** The origin is a process that

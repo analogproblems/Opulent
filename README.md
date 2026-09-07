@@ -112,6 +112,8 @@ Some projects ship every change as one reviewed PR per unit — one implementati
 
 Two honest limits of a record built from observation: a review spawned without a `unit:` line in its brief renders as `(unattached)`; a unit implemented from a brief that lacked the marker is simply not in the ledger. Both are gaps in the record, not claims about the work.
 
+The policy also carries a **review ladder** — one full review per unit, a second only after a NOT SAFE verdict and only on the delta, never a third — and it is recorded, not enforced: the ledger counts a unit's `reviewed` events, and what the architect does after the second one is visible there. The enforcement question is deliberately left open until the record says whether it is needed.
+
 A config, every key optional except `schema`. `${SCRATCHPAD}` expands to `CLAUDE_SCRATCHPAD_DIR`, `CLAUDE_SCRATCHPAD` or `OPULENT_SCRATCHPAD` if one is set, else the system temp directory — so a build lock defaults to machine-wide, which is what a shared lock wants:
 
 ```json
