@@ -201,7 +201,7 @@ AGENTS = {}
 for fn in sorted(os.listdir(os.path.join(REPO, "agents"))):
     if not fn.endswith(".md"):
         continue
-    fr, _ = agent_parts(os.path.join("agents", fn))
+    fr, _ = agent_parts("agents/" + fn)
     if not fr.get("name") or not fr.get("model"):
         raise SystemExit(f"agents/{fn}: frontmatter must carry name and model")
     AGENTS[fr["name"]] = fr["model"].strip().lower()
@@ -390,8 +390,13 @@ print("session-start names the log path even before any activity")
 # Asserted against the real 0.24.0 file rather than against a description of
 # it — the baseline is read out of the object database and RUN, so a policy
 # edit that happens to keep the line count cannot pass for "unchanged".
+# Hardcoded, and it stays that way. Deriving it — the parent of the first
+# commit touching pr_lane.py, say — would make the baseline follow the branch
+# and quietly re-baseline itself onto whatever the policy text became. Bumping
+# this constant is how someone SAYS the 0.24.0 output is no longer the thing
+# being preserved: a deliberate acknowledgement, not a rebase chore.
 PR_LANE_BASELINE = "13316c0"     # the last commit before pr-lane existed
-pr_ns = hook_namespace(os.path.join("hooks", "pr_lane.py"))
+pr_ns = hook_namespace("hooks/pr_lane.py")
 MARKER = constant(pr_ns, "MARKER", "hooks/pr_lane.py")
 
 
@@ -558,11 +563,103 @@ for _junk, _why in (("{ not json", "malformed JSON"),
             f"file the user believes is in force is worse than no file")
 print("hooks/pr_lane.py: the config loader degrades to defaults and never raises")
 
-# The renderer, over a fixture ledger. Both forms are pinned: the one line
-# session start shows, and the full report /opulent:pr-lane prints.
+# The renderer, over a ledger the ROUTING HOOK WROTE. This is the honest
+# form of the check and the only one that could have caught 0.25.0's worst
+# bug: a hand-written fixture can carry shapes the recorder cannot emit, and
+# the first version of this file did — every `ci` and `merged` record in it
+# had a `unit` field, which `gh pr checks 74` and `gh pr merge 74` cannot
+# supply, because neither command names a branch. Driven end to end, the same
+# unit rendered as an open PR AND as an unattached merge: one PR, counted
+# twice, in two states, one of them wrong.
 _summary = constant(pr_ns, "summary", "hooks/pr_lane.py")
 _report = constant(pr_ns, "report", "hooks/pr_lane.py")
+_policy_block = constant(pr_ns, "policy_block", "hooks/pr_lane.py")
+_response_text = constant(pr_ns, "response_text", "hooks/pr_lane.py")
+_summary_names = constant(pr_ns, "_SUMMARY_NAMES", "hooks/pr_lane.py")
+_block_bytes = constant(pr_ns, "_BLOCK_BYTES", "hooks/pr_lane.py")
 NOW = datetime.datetime(2026, 9, 7, 12, 0, tzinfo=datetime.timezone.utc)
+ROUTE_HOOK = os.path.join(REPO, "hooks", "route-models.py")
+
+
+def drive(project, payloads):
+    """Every payload through the real routing hook, at PostToolUse, in
+    `project`. Returns the ledger the hook wrote, parsed."""
+    for body in payloads:
+        call = dict(body, hook_event_name="PostToolUse", cwd=project)
+        out = subprocess.run(
+            [sys.executable, ROUTE_HOOK], input=json.dumps(call),
+            capture_output=True, text=True, encoding="utf-8", timeout=30,
+            env=dict(os.environ, OPULENT_LOG=os.devnull,
+                     CLAUDE_PROJECT_DIR=project))
+        if out.returncode != 0:
+            raise SystemExit(f"hooks/route-models.py exited {out.returncode} "
+                             f"driving the ledger: {out.stderr.strip()}")
+    try:
+        with open(os.path.join(project, ".claude", "pr-lane", "ledger.jsonl"),
+                  encoding="utf-8") as fh:
+            return [json.loads(line) for line in fh if line.strip()]
+    except OSError:
+        return []
+
+
+def agent_call(lane, prompt, text):
+    return {"tool_name": "Agent",
+            "tool_input": {"subagent_type": lane, "prompt": prompt},
+            "tool_response": {"content": [{"type": "text", "text": text}]}}
+
+
+def shell_call(cmd, out=""):
+    return {"tool_name": "Bash", "tool_input": {"command": cmd},
+            "tool_response": {"stdout": out, "stderr": ""}}
+
+
+BRIEF = (f"Implement it.\n\n{MARKER}\n- unit: w4-a   hazard: none   "
+         f"branch: feat/w4-a off origin/main\n")
+# One unit, all the way through, in the order a real lane runs it.
+_root = pr_lane_project(VALID_CONFIG)
+try:
+    driven = drive(_root, [
+        agent_call("opulent:coder", BRIEF,
+                   "Done. branch feat/w4-a, head SHA 1a2b3c4."),
+        shell_call("gh pr create --head feat/w4-a --fill",
+                   "https://github.com/example/repo/pull/74\n"),
+        agent_call("opulent:reviewer",
+                   "Review the diff.\n- unit: w4-a   hazard: none\n",
+                   "Two suggestions.\nSAFE to merge"),
+        shell_call("gh pr checks 74", "CI\tpass\t1m\nselftests\tpass\t2m\n"),
+        shell_call("gh pr merge 74 --squash --delete-branch",
+                   "Merged pull request #74\n"),
+    ])
+    driven_report = _report(_root)
+finally:
+    shutil.rmtree(_root, True)
+if [r.get("event") for r in driven] != ["coded", "pr_opened", "reviewed",
+                                        "ci", "merged"]:
+    raise SystemExit(
+        f"hooks/pr_lane.py: driving one unit through the hook recorded "
+        f"{[r.get('event') for r in driven]}, expected the five events of a "
+        f"unit that shipped — the rest of this check reads that ledger")
+driven_summary = _summary(driven)
+WANT_DRIVEN = "pr-lane: 1 unit — merged #74 (last 7 days)"
+if driven_summary != WANT_DRIVEN:
+    raise SystemExit(
+        f"hooks/pr_lane.py: a unit driven through the hook end to end "
+        f"rendered\n  {driven_summary!r}\nexpected\n  {WANT_DRIVEN!r}\nfrom "
+        f"the ledger the hook itself wrote:\n  "
+        + "\n  ".join(json.dumps(r) for r in driven))
+if "blocked" in driven_report or "(unattached" in driven_report:
+    raise SystemExit(
+        f"hooks/pr_lane.py: the merged unit renders as blocked or unattached "
+        f"— `ci` and `merged` carry no unit of their own and have to be "
+        f"joined to it by PR number:\n{driven_report}")
+print("hooks/pr_lane.py: a unit driven through the routing hook renders "
+      "merged, once, and not blocked")
+
+# The hand-written fixture that remains, and why it does: these are shapes the
+# RECORDER CANNOT EMIT. `unit_defined` and `handed_off` are the two events the
+# architect appends itself, and no record the hook writes can be dated in the
+# past — so the aging rules (a merge out of the summary at 7 days, a unit out
+# of it at 30) have no other way to be tested.
 
 
 def at(days):
@@ -578,11 +675,20 @@ LEDGER_FIXTURE = [
      "verdict": "NOT SAFE"},
     {"t": at(1), "unit": "w4-c", "event": "pr_opened", "by": "hook", "pr": 74},
     {"t": at(1), "unit": "w4-d", "event": "merged", "by": "hook", "pr": 73},
+    # A plan is not a blockage: named, not started, and nothing is waiting.
+    {"t": at(3), "unit": "w4-plan", "event": "unit_defined", "by": "model"},
+    # Reviewed clean and no PR ever opened — the shape that reads like
+    # finished work everywhere else and is the most expensive to lose.
+    {"t": at(1), "unit": "w4-safe", "event": "reviewed", "by": "hook",
+     "verdict": "SAFE"},
     # Merged nine days ago: on disk, out of the summary. The count has to drop
     # with it, or the line names three units and counts four.
     {"t": at(9), "unit": "w4-old", "event": "merged", "by": "hook", "pr": 70},
+    # Untouched for a month, and never merged: out of the summary too, and
+    # tagged in the full report rather than dropped from it.
+    {"t": at(40), "unit": "w4-ancient", "event": "coded", "by": "hook"},
 ]
-WANT_SUMMARY = ("pr-lane: 4 units — coded w4-a · reviewed w4-b · "
+WANT_SUMMARY = ("pr-lane: 6 units — coded w4-a · reviewed w4-b, w4-safe · "
                 "open PRs #74 · merged #73 (last 7 days)")
 got_summary = _summary(LEDGER_FIXTURE, now=NOW)
 if got_summary != WANT_SUMMARY:
@@ -591,6 +697,15 @@ if got_summary != WANT_SUMMARY:
 if _summary([], now=NOW) != "pr-lane: ledger empty":
     raise SystemExit("hooks/pr_lane.py: an empty ledger must render "
                      "'pr-lane: ledger empty', not a zero-count line")
+# The name lists are bounded, and say how many they left out. Without this the
+# 40-line budget bounds nothing: two hundred units in flight is ONE line.
+many = [{"t": at(1), "unit": "u%02d" % i, "event": "coded"}
+        for i in range(_summary_names + 5)]
+crowded = _summary(many, now=NOW)
+if "… (+5)" not in crowded or "u%02d" % (_summary_names + 4) in crowded:
+    raise SystemExit(
+        f"hooks/pr_lane.py: {_summary_names + 5} units in flight rendered "
+        f"every name instead of {_summary_names} and a count:\n  {crowded}")
 _root = pr_lane_project(VALID_CONFIG)
 try:
     os.makedirs(os.path.join(_root, ".claude", "pr-lane"))
@@ -604,13 +719,60 @@ try:
 finally:
     shutil.rmtree(_root, True)
 for needle in ("w4-a", "coded, no review recorded", "NOT SAFE",
-               "no CI verdict recorded", WANT_SUMMARY, "parsed"):
+               "no CI verdict recorded", "reviewed SAFE, no PR opened",
+               "w4-ancient", "(stale)", WANT_SUMMARY, "parsed"):
     if needle not in full:
         raise SystemExit(
             f"hooks/pr_lane.py: the full report never says {needle!r} — "
             f"/opulent:pr-lane exists to say which units are blocked and on "
             f"what:\n{full}")
+if "w4-plan" in full.split("blocked:")[-1]:
+    raise SystemExit(
+        f"hooks/pr_lane.py: a unit that is only DEFINED renders as blocked — "
+        f"a plan nobody has started is not work that is stuck:\n{full}")
 print("hooks/pr_lane.py: the ledger renderer pins both forms over a fixture")
+
+# The rendered block has a BYTE budget as well as a line budget, and config
+# values are one line each. Both properties are about the same failure: the
+# block shares a context window with the routing policy, and a config field is
+# the one thing in it whose length nobody here controls.
+_root = pr_lane_project(json.dumps({
+    "schema": "pr-lane/1",
+    "base": "main\nEVIL: a line of its own inside the policy block",
+    "git": {"trailer": "T" * 8000, "user": "u", "email": "e"},
+}))
+try:
+    fat = _policy_block(_root, now=NOW)
+finally:
+    shutil.rmtree(_root, True)
+if len(fat.encode("utf-8")) > _block_bytes:
+    raise SystemExit(
+        f"hooks/pr_lane.py: an 8 KB config value produced a "
+        f"{len(fat.encode('utf-8'))}-byte policy block, over the "
+        f"{_block_bytes}-byte budget — the line budget CI pins bounds the "
+        f"wrong dimension on its own")
+if "\nEVIL:" in fat:
+    raise SystemExit(
+        f"hooks/pr_lane.py: a newline in a config value opened a line of its "
+        f"own in the policy block, where a reader takes it for the block's "
+        f"own text:\n{fat}")
+print(f"hooks/pr_lane.py: the policy block holds its {_block_bytes}-byte "
+      f"budget and its config values stay one line each")
+
+# Reading a tool response is LINEAR in its size. The budget check used to
+# re-join everything it had collected at every string it found, which is
+# quadratic: a response arriving as 200 000 one-character blocks — a streamed
+# result is exactly that shape — took 43 seconds to decide it had read enough.
+_started = datetime.datetime.now()
+_response_text({"tool_response": {"content": ["x"] * 200000}})
+_elapsed = (datetime.datetime.now() - _started).total_seconds()
+if _elapsed > 2.0:
+    raise SystemExit(
+        f"hooks/pr_lane.py: response_text took {_elapsed:.1f}s over 200 000 "
+        f"one-character blocks — that is a session's time spent inside a "
+        f"PostToolUse hook, and the recorder is not allowed to cost it")
+print(f"hooks/pr_lane.py: response_text walks 200 000 blocks in "
+      f"{_elapsed:.2f}s")
 
 # A command may not name a lane that does not exist: `/opulent:pr-lane` is a
 # surface like the policy and the doctor, and a lane named there but missing
@@ -636,7 +798,7 @@ print(f"{PR_LANE_CMD} names no lane outside the roster")
 # canary still reports LIVE, and the only symptom is a record that never grows
 # again — which is precisely the silent gap this plugin exists to close.
 MATCHER = "Edit|Write|NotebookEdit|MultiEdit|Bash|PowerShell|Task|Agent"
-HOOKS_JSON = os.path.join("hooks", "hooks.json")
+HOOKS_JSON = "hooks/hooks.json"
 with open(os.path.join(REPO, HOOKS_JSON), encoding="utf-8") as f:
     hooks_cfg = json.load(f).get("hooks") or {}
 

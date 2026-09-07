@@ -71,10 +71,45 @@ DEFAULTS = {
 
 _UNSET = "(not configured)"
 _SUMMARY_DAYS = 7
+# A unit whose last record is older than this is not in flight any more,
+# whatever its last event was. It stays on disk and stays in the full report
+# (tagged `(stale)`); it leaves the one-line summary, which is a status line
+# for work that is moving.
+_STALE_DAYS = 30
+# How many names one summary part will list before it counts the rest. The
+# line shares a context window with the routing policy, and forty unit ids
+# spent on one part is the whole budget.
+_SUMMARY_NAMES = 6
+# The rendered policy block's byte budget. The 40-line budget CI pins bounds
+# the wrong dimension on its own: a two-hundred-unit summary is one 2 KB line
+# and passes it.
+_BLOCK_BYTES = 3 * 1024
+_TRUNCATED = ("pr-lane: the block hit its %d KiB budget and was cut here."
+              % (_BLOCK_BYTES // 1024))
+# How much of the ledger one render reads, in lines — the same posture
+# session-start.py's `_recent_activity` takes toward the routing log's 500.
+_READ_LINES = 2000
 
 
 # --------------------------------------------------------------------------
 # paths
+
+
+# Git Bash spells `C:\Users\x` as `/c/Users/x`, and normpath turns that into
+# `\c\Users\x` — a path equal to nothing, so the config lookup misses and the
+# whole module is silently off in exactly the shell this project is driven
+# from. route-models._msys_drive is the source of truth for this mapping and
+# carries the full rationale; this is a copy rather than an import because
+# route-models imports THIS module, and the cycle would cost the hook its
+# recorder. POSIX has no such convention, hence the platform guard.
+_MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])/")
+
+
+def _msys_drive(p):
+    if sys.platform != "win32":
+        return p
+    m = _MSYS_DRIVE_RE.match(p)
+    return m.group(1).upper() + ":\\" + p[3:] if m else p
 
 
 def project_dir(cwd=None):
@@ -89,7 +124,7 @@ def project_dir(cwd=None):
     env = os.environ.get("CLAUDE_PROJECT_DIR")
     base = env or cwd or os.getcwd()
     try:
-        return os.path.normpath(str(base))
+        return os.path.normpath(_msys_drive(str(base)))
     except Exception:
         return os.getcwd()
 
@@ -151,12 +186,25 @@ class Config(object):
 
 
 def _expand(value):
-    """`${SCRATCHPAD}` in any string the config carries. Applied everywhere
-    rather than only to `lock_dir`: a target_dir or a command can want the
-    same directory, and a token that expands in one field and not its
-    neighbour is a trap, not a feature."""
-    if isinstance(value, str) and "${SCRATCHPAD}" in value:
-        return value.replace("${SCRATCHPAD}", scratchpad())
+    """`${SCRATCHPAD}` in any string the config carries, and every string
+    flattened to ONE line.
+
+    Expansion is applied everywhere rather than only to `lock_dir`: a
+    target_dir or a command can want the same directory, and a token that
+    expands in one field and not its neighbour is a trap, not a feature.
+
+    The flattening is the same kind of rule: a config value is one line by
+    definition — every field this file renders sits inside a line of the
+    contract — so a value carrying newlines does not get to add lines to a
+    block that has a budget, or to open a line of its own where a reader
+    would take it for the block's own text."""
+    if isinstance(value, str):
+        if "\n" in value or "\r" in value:
+            value = " ".join(value.split("\n"))
+            value = " ".join(value.split("\r"))
+        if "${SCRATCHPAD}" in value:
+            return value.replace("${SCRATCHPAD}", scratchpad())
+        return value
     if isinstance(value, list):
         return [_expand(v) for v in value]
     if isinstance(value, dict):
@@ -243,6 +291,17 @@ def load(project):
                         % (method, "/".join(MERGE_METHODS),
                            DEFAULTS["pr"]["method"]))
         data["pr"]["method"] = DEFAULTS["pr"]["method"]
+    provider = data["review"].get("provider")
+    if isinstance(provider, str) and provider in CODING_LANES:
+        # A coding lane named as the review provider does not merely mislabel
+        # one record: the recorder tests the provider FIRST, so every coder
+        # return would be filed as a review and `coded` would be unreachable
+        # for the whole session. Treated as unset — the default provider —
+        # like an out-of-range pr.merge above, and said out loud.
+        warnings.append("review.provider %r is a coding lane, which would "
+                        "make `coded` unrecordable; using %r"
+                        % (provider, DEFAULTS["review"]["provider"]))
+        data["review"]["provider"] = DEFAULTS["review"]["provider"]
     return Config(True, path, data, warnings, None)
 
 
@@ -314,6 +373,22 @@ def contract(cfg, unit="<unit-id>", hazard="<name|none>"):
     ])
 
 
+def _budget(text, limit=_BLOCK_BYTES):
+    """`text` clipped to a byte budget, on a line boundary, saying so.
+
+    Bytes rather than lines because the config's own values are in here and
+    nothing bounds their length: one `never_commit` list is one line however
+    many kilobytes it is. Clipping loses the tail — the summary — rather than
+    the contract, which is the half a brief has to be able to paste."""
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return text
+    room = max(0, limit - len(_TRUNCATED.encode("utf-8")) - 1)
+    clipped = raw[:room].decode("utf-8", "ignore")
+    head, sep, _tail = clipped.rpartition("\n")
+    return (head if sep else clipped) + "\n" + _TRUNCATED
+
+
 def policy_block(project, now=None):
     """The text session-start.py appends — and the empty string is the whole
     point of the function. No config, no block, no separator, no newline: the
@@ -323,7 +398,7 @@ def policy_block(project, now=None):
         return ""
     warn = warning_line(cfg)
     if cfg.error:
-        return "\n\n" + warn
+        return _budget("\n\n" + warn)
     lines = [
         "# pr-lane (opulent plugin, opt-in)",
         "",
@@ -359,7 +434,7 @@ def policy_block(project, now=None):
     ]
     if warn:
         lines.append(warn)
-    return "\n\n" + "\n".join(lines)
+    return _budget("\n\n" + "\n".join(lines))
 
 
 # --------------------------------------------------------------------------
@@ -390,7 +465,11 @@ def append(project, fields):
             value = fields.get(key)
             if value not in (None, ""):
                 entry[key] = value
-        with open(path, "a", encoding="utf-8") as fh:
+        # newline="\n" because the command that renders this file invites the
+        # architect to append to it with `>>`, which writes LF on every
+        # platform: without the pin, Windows would give the hook's own lines
+        # CRLF and the file would carry two spellings of one record type.
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
             # One write() per line, as the routing log does it, so two
             # sessions appending at once cannot tear each other's records.
             fh.write(json.dumps(entry) + "\n")
@@ -400,13 +479,18 @@ def append(project, fields):
 
 
 def read(project):
-    """Every parseable line, in file order. A torn or hand-edited line is not
-    a record and is skipped in silence — the same reading the session-start
-    telemetry gives the routing log."""
+    """The last _READ_LINES parseable lines, in file order. A torn or
+    hand-edited line is not a record and is skipped in silence — the same
+    reading the session-start telemetry gives the routing log.
+
+    Bounded for the same reason that telemetry reads 500: this runs at every
+    session start, the file only grows, and a year of units is a file nobody
+    wants read into memory to render one line. Old records stay on disk; they
+    stop being rendered long before this bound, at _STALE_DAYS."""
     try:
         with open(ledger_path(project), encoding="utf-8",
                   errors="replace") as fh:
-            lines = fh.readlines()
+            lines = fh.readlines()[-_READ_LINES:]
     except Exception:
         return []
     out = []
@@ -442,12 +526,38 @@ def _age_days(entry, now):
 def _units(entries):
     """Records grouped by unit, in first-seen order. File order is the truth:
     a hand-appended line carrying a stale timestamp still happened last, and
-    sorting by `t` would let it change the past."""
+    sorting by `t` would let it change the past.
+
+    A record with a PR number and no unit is JOINED to whichever unit another
+    record gave that same PR. `gh pr checks 74` and `gh pr merge 74` name no
+    branch, so the recorder cannot know their unit from the command — and
+    without the join, the unit that reached CI and merged still rendered as
+    `coded, no review recorded` while its own merge sat in a separate bucket:
+    one PR, counted twice, in two states, one of them wrong.
+
+    Records the join cannot reach are bucketed BY PR (`(unattached #74)`),
+    never all together. The single-bucket version let one PR's `merged`
+    overwrite another PR's failing CI, which is the one way this file could
+    erase a red result rather than merely fail to attribute it. Only a record
+    with neither unit nor PR falls into the shared `(unattached)`."""
+    by_pr = {}
+    for entry in entries:
+        unit, pr = entry.get("unit"), entry.get("pr")
+        if unit not in (None, "") and pr not in (None, ""):
+            by_pr.setdefault(str(pr), str(unit))
     groups = {}
     order = []
     for entry in entries:
-        unit = entry.get("unit")
-        unit = str(unit) if unit not in (None, "") else "(unattached)"
+        unit, pr = entry.get("unit"), entry.get("pr")
+        if unit not in (None, ""):
+            unit = str(unit)
+        elif pr in (None, ""):
+            unit = "(unattached)"
+        elif str(pr) in by_pr:
+            unit = by_pr[str(pr)]
+            entry = dict(entry, unit=unit)   # a copy: the caller's list stands
+        else:
+            unit = "(unattached #%s)" % pr
         if unit not in groups:
             groups[unit] = []
             order.append(unit)
@@ -481,21 +591,40 @@ def _pr_label(state, unit):
     return "#%s" % state["pr"] if state["pr"] else unit
 
 
+def _unit_age(state, now):
+    """Days since this unit's last recorded event, or None when nothing it
+    can read says. None means "do not hide it"."""
+    last = state.get("last")
+    return _age_days(last, now) if last else None
+
+
+def _names(items):
+    """A comma-joined name list, bounded, counting what it left out. A
+    summary that lists two hundred units is not a summary of them."""
+    if len(items) <= _SUMMARY_NAMES:
+        return ", ".join(items)
+    return "%s … (+%d)" % (", ".join(items[:_SUMMARY_NAMES]),
+                           len(items) - _SUMMARY_NAMES)
+
+
 def summary(entries, now=None):
     """The one line session start renders (§3.6 of the spec).
 
     `<n> units` counts what the line SHOWS: a unit merged more than seven days
-    ago is dropped from the count as well as from the sections, because a
-    number larger than the names beside it is a number nobody can check. The
-    records stay on disk either way — this hides, it never prunes."""
+    ago — or one nothing has touched in a month, merged or not — is dropped
+    from the count as well as from the sections, because a number larger than
+    the names beside it is a number nobody can check. The records stay on disk
+    either way, and the full report still shows them: this hides, it never
+    prunes."""
     now = now or datetime.datetime.now(datetime.timezone.utc)
     shown = []
     for unit, records in _units(entries):
         state = _state(records)
-        if state.get("merged"):
-            age = _age_days(state["last"], now)
-            if age is not None and age > _SUMMARY_DAYS:
-                continue
+        age = _unit_age(state, now)
+        if age is not None and age > _STALE_DAYS:
+            continue
+        if state.get("merged") and age is not None and age > _SUMMARY_DAYS:
+            continue
         shown.append((unit, state))
     if not shown:
         return "pr-lane: ledger empty"
@@ -506,14 +635,14 @@ def summary(entries, now=None):
     merged = [_pr_label(s, u) for u, s in shown if s.get("merged")]
     parts = []
     if coded:
-        parts.append("coded " + ", ".join(coded))
+        parts.append("coded " + _names(coded))
     if reviewed:
-        parts.append("reviewed " + ", ".join(reviewed))
+        parts.append("reviewed " + _names(reviewed))
     if open_prs:
-        parts.append("open PRs " + ", ".join(open_prs))
+        parts.append("open PRs " + _names(open_prs))
     if merged:
         parts.append("merged %s (last %d days)"
-                     % (", ".join(merged), _SUMMARY_DAYS))
+                     % (_names(merged), _SUMMARY_DAYS))
     line = "pr-lane: %d unit%s" % (len(shown), "" if len(shown) == 1 else "s")
     if parts:
         line += " — " + " · ".join(parts)
@@ -521,7 +650,10 @@ def summary(entries, now=None):
 
 
 def _blocked(unit, state):
-    """Why a unit is not moving, in the spec's four shapes. None when it is."""
+    """Why a unit is not moving, in six shapes. None when it is.
+
+    `unit_defined` is deliberately not one of them: a unit somebody named and
+    has not started is a plan, and a plan is not a blockage."""
     event = state["event"]
     if state.get("merged"):
         return None
@@ -529,6 +661,11 @@ def _blocked(unit, state):
         return "review came back NOT SAFE"
     if event == "coded":
         return "coded, no review recorded"
+    if event == "reviewed" and state["verdict"] == "SAFE" and not state["pr"]:
+        # The gap the four-shape version left open, and the expensive one:
+        # a unit that passed review and never got its PR opened reads as
+        # finished work in every other line of this file.
+        return "reviewed SAFE, no PR opened"
     if state["pr"] and state["ci"] is None:
         return "PR %s open, no CI verdict recorded" % _pr_label(state, unit)
     if state["ci"] == "fail":
@@ -577,6 +714,12 @@ def report(project, now=None):
             bits.append(state["branch"])
         if state["sha"]:
             bits.append(str(state["sha"])[:12])
+        age = _unit_age(state, now)
+        if age is not None and age > _STALE_DAYS:
+            # Out of the summary, still in the report — the full form is where
+            # you go to find the unit the one-liner stopped mentioning, so it
+            # says why rather than dropping it too.
+            bits.append("(stale)")
         lines.append("  %-24s %s" % (unit, " - ".join(bits)))
         why = _blocked(unit, state)
         if why:
@@ -603,8 +746,34 @@ _BRANCH = re.compile(r"\bfeat/([A-Za-z0-9][\w.\-]{0,63})")
 _SHA = re.compile(r"\b(?:sha|SHA|commit)\b[^\n0-9a-f]{0,20}([0-9a-f]{7,40})\b")
 _PR_URL = re.compile(r"/pull/(\d+)")
 _PR_ARG = re.compile(r"\bpr\s+(?:merge|checks|view|edit)\s+#?(\d+)")
-_PENDING = re.compile(r"\b(pending|queued|in_progress|in progress)\b", re.I)
-_FAILING = re.compile(r"\b(fail|failed|failing|failure|failures)\b", re.I)
+# Anchored words, on the report's last line only. "UNSAFE" has no word
+# boundary before SAFE and so matches neither pattern — the substring reading
+# these replaced called it an approval.
+_NOT_SAFE = re.compile(r"\bNOT\s+SAFE\b")
+_SAFE = re.compile(r"(?<!UN)\bSAFE\b")
+# A `gh pr checks` row is `name<TAB>status<TAB>duration<TAB>url`, and only the
+# STATUS column is a verdict. Scanned as whole text, a job named `fail-fast`
+# or a URL ending in `/failures` made every green run red.
+_CI_PASS = ("pass", "success", "skipping", "skipped")
+_CI_FAIL = ("fail", "failure", "error", "cancelled")
+_CI_PENDING = ("pending", "queued", "in_progress", "in progress", "waiting")
+# `gh` reporting a failure is not the tool doing the thing. Line-anchored, so
+# a PR body or a check name that merely contains one of these is not a
+# refusal; case-insensitive, because gh is not consistent about it.
+_ERROR_LINE = re.compile(
+    r"(?im)^[ \t]*(?:GraphQL:|error:|X |failed to|not mergeable|HTTP 4|HTTP 5)")
+# `--auto` ARMS a merge; it does not perform one. Phase 1 has no event for
+# "armed", so the honest record is no record.
+_AUTO = re.compile(r"(?<![\w-])--auto\b")
+# Command position, and comments. Both borrowed from route-models.py, which
+# is the source of truth for how this plugin reads a shell command; copies
+# rather than imports because route-models imports THIS module.
+_CMD_PREFIXES = {"sudo", "command", "time", "env", "xargs", "nice",
+                 "timeout", "nohup", "setsid", "stdbuf"}
+_COMMENT = re.compile(r"(?m)(?:^|\s)#[^\n]*")
+_SEGMENTS = re.compile(r"&&|\|\||[;\n|]")
+_HEREDOC = re.compile(
+    r"(?<!<)<<(?!<)-?\s*(?:'([A-Za-z_]\w*)'|\"([A-Za-z_]\w*)\"|\\?([A-Za-z_]\w*))")
 # Bound every text this reads. An agent report can be tens of thousands of
 # characters and a `gh` run can print a wall of check rows; the fields parsed
 # out of either live in the first few hundred lines, and an unbounded regex
@@ -619,6 +788,66 @@ def _unquoted(text):
     return _QUOTED.sub(" ", text or "")
 
 
+def _strip_heredocs(cmd):
+    """The command with every heredoc BODY (and its terminator) removed, and
+    only when the terminator actually exists — route-models._strip_heredocs,
+    which carries the full rationale. Here it is what stops `gh pr create`
+    written INSIDE a PR-body document from being read as the call that opens
+    the PR, while the real `gh pr create` after the terminator still is."""
+    if "<<" not in cmd:
+        return cmd
+    lines = cmd.split("\n")
+    out = []
+    k = 0
+    while k < len(lines):
+        line = lines[k]
+        out.append(line)
+        k += 1
+        for m in _HEREDOC.finditer(line):
+            delim = next((g for g in m.groups() if g is not None), "")
+            if not delim:
+                continue
+            dashed = m.group(0)[2:3] == "-"
+            end = None
+            for j in range(k, len(lines)):
+                cand = lines[j].lstrip("\t") if dashed else lines[j]
+                if cand == delim:
+                    end = j
+                    break
+            if end is None:
+                continue        # unterminated: strip NOTHING
+            k = end + 1
+    return "\n".join(out)
+
+
+def runs_gh_pr(cmd, verb):
+    """True when `cmd` actually RUNS `gh pr <verb>` — the token at a command
+    position, not merely present in the text.
+
+    The substring reading this replaced recorded a PR for `echo gh pr
+    create`, for `# gh pr create` in a note to self, and for the same words
+    inside a heredoc'd PR body. Documents are stripped, quoted spans and
+    comments blanked, and what is left is split on the operators that end a
+    command; a segment counts only if `gh pr <verb>` is its first three words
+    once env assignments and wrapper prefixes are stepped over.
+
+    A prefix's OWN options are not stepped over (`sudo -u x gh pr merge`
+    reads as no command here). That direction is the safe one: the cost is a
+    record this file does not make, not a record it invents."""
+    text = _COMMENT.sub(" ", _unquoted(_strip_heredocs(cmd or "")))
+    want = ["gh", "pr", verb]
+    for segment in _SEGMENTS.split(text):
+        words = segment.split()
+        i = 0
+        while i < len(words) and (
+                words[i].rsplit("/", 1)[-1] in _CMD_PREFIXES
+                or ("=" in words[i] and not words[i].startswith("-"))):
+            i += 1
+        if words[i:i + 3] == want:
+            return True
+    return False
+
+
 def response_text(payload):
     """Whatever text a PostToolUse payload carries back from the tool.
 
@@ -630,12 +859,19 @@ def response_text(payload):
     the harness sent another, and silence is the failure mode a ledger cannot
     afford."""
     found = []
+    # A RUNNING total, not a re-join per node: the budget check used to
+    # rebuild the whole accumulated string at every string it found, which is
+    # quadratic — a response arriving as 200 000 one-character blocks (a
+    # streamed tool result is exactly that shape) took 43 seconds of a
+    # session's time to decide it had read enough.
+    size = [0]
 
     def walk(node, depth):
-        if depth > 6 or len("".join(found)) > _TEXT_LIMIT:
+        if depth > 6 or size[0] > _TEXT_LIMIT:
             return
         if isinstance(node, str):
             found.append(node)
+            size[0] += len(node)
         elif isinstance(node, dict):
             hit = False
             for key in ("text", "stdout", "stderr", "output", "content",
@@ -705,28 +941,50 @@ def pr_from_text(text):
 
 def review_verdict(text):
     """SAFE / NOT SAFE / unknown, read off the report's LAST line — which is
-    where agents/reviewer.md puts it. NOT SAFE is tested first because SAFE is
-    a substring of it, and getting that order wrong turns every rejection into
-    an approval."""
+    where agents/reviewer.md puts it.
+
+    Both readings are anchored WORDS, and NOT SAFE is tested first because
+    SAFE is a substring of it: getting either wrong turns a rejection into an
+    approval, which is the one misreading in this file that can get bad code
+    merged. `UNSAFE` — no boundary before SAFE — was read as an approval by
+    the substring version and is `unknown` here, because a reviewer who wrote
+    it did not write the charter's verdict line and the ledger should say so
+    rather than pick one."""
     lines = [l.strip() for l in (text or "").splitlines() if l.strip()]
     if not lines:
         return "unknown"
-    last = lines[-1].upper()
-    if "NOT SAFE" in last:
+    last = lines[-1].upper()      # upper(): the anchoring is case-blind
+    if _NOT_SAFE.search(last):
         return "NOT SAFE"
-    if "SAFE" in last:
+    if _SAFE.search(last):
         return "SAFE"
     return "unknown"
 
 
 def ci_verdict(text):
-    """pass/fail for a settled `gh pr checks`, or None while anything is still
-    running. Textual, like TEST_RE in the routing hook: there is no API call
-    here, and a record that guessed at a run still in flight would be read as
-    a result."""
-    if not text or _PENDING.search(text):
+    """pass/fail for a settled `gh pr checks`, or None for anything else —
+    still running, no rows this can read, a status nobody here recognises.
+
+    Read from the STATUS COLUMN of each row, never from the output as a whole.
+    Scanning the text made a check named `fail-fast` and a run URL ending in
+    `/failures` into failures of their own, which is a verdict about the
+    naming of a job reported as a verdict about the code. Textual either way,
+    like TEST_RE in the routing hook: there is no API call here, and None —
+    record nothing — is what every reading short of a settled one produces."""
+    rows = []
+    for line in (text or "").splitlines():
+        cols = line.split("\t")
+        if len(cols) >= 2:
+            rows.append(cols[1].strip().lower())
+    if not rows:
         return None
-    return "fail" if _FAILING.search(text) else "pass"
+    if any(r in _CI_PENDING for r in rows):
+        return None     # in flight: pending outranks a row that already fails
+    if any(r in _CI_FAIL for r in rows):
+        return "fail"
+    if all(r in _CI_PASS for r in rows):
+        return "pass"
+    return None         # a status this does not know is not a verdict
 
 
 def record(payload, tool, tool_input, cwd, project=None, cfg=None):
@@ -756,6 +1014,16 @@ def record(payload, tool, tool_input, cwd, project=None, cfg=None):
 
 
 def _record_agent(payload, tool_input, cfg):
+    """A lane's return, read for a ledger line.
+
+    The asymmetry between the two branches is deliberate and worth stating:
+    `coded` requires the contract MARKER in the brief, `reviewed` does not.
+    The marker is what separates a pr-lane unit from the ordinary delegations
+    that make up most of a session, and a coding lane is spawned for both —
+    so without it the ledger would record every implementation this plugin
+    routes. The review provider is spawned for one thing, and a review whose
+    brief the architect wrote by hand is still that unit's review; requiring
+    the marker there would lose real verdicts to a formatting slip."""
     lane = (tool_input or {}).get("subagent_type") or ""
     if not isinstance(lane, str):
         lane = str(lane)
@@ -763,7 +1031,9 @@ def _record_agent(payload, tool_input, cfg):
     report_text = response_text(payload)
     provider = str(cfg.get("review", "provider",
                            DEFAULTS["review"]["provider"]))
-    if lane == provider:
+    # `provider and` — an empty provider must not match a Task that named no
+    # lane, which is the one way this branch could file a review nobody ran.
+    if provider and lane == provider:
         return {"event": "reviewed", "unit": unit_from_text(prompt),
                 "verdict": review_verdict(report_text)}
     if lane in CODING_LANES and MARKER in prompt:
@@ -779,20 +1049,34 @@ def _record_agent(payload, tool_input, cfg):
 
 
 def _record_shell(payload, tool_input):
+    """A `gh` call, read for a ledger line.
+
+    Whether a nonzero-exit Bash call even reaches PostToolUse is NOT verified
+    anywhere in this repo — the harness may or may not send a separate
+    failure event — so nothing here relies on having been called only after a
+    success. The guard is the output itself: a `gh` run whose text reports an
+    error opened, merged and checked nothing, and is recorded as nothing."""
     cmd = (tool_input or {}).get("command") or ""
     if not isinstance(cmd, str):
         cmd = str(cmd)
     cmd = cmd[:_TEXT_LIMIT]
-    probe = " ".join(_unquoted(cmd).split())
     out = response_text(payload)
-    if "gh pr create" in probe:
+    if _ERROR_LINE.search(out):
+        return None
+    if runs_gh_pr(cmd, "create"):
         return {"event": "pr_opened", "unit": unit_from_branch(cmd),
                 "branch": branch_from_text(cmd),
                 "pr": pr_from_text(out) or pr_from_text(cmd)}
-    if "gh pr merge" in probe:
+    if runs_gh_pr(cmd, "merge"):
+        if _AUTO.search(_unquoted(cmd)):
+            # `--auto` arms the merge for whenever CI goes green, which may
+            # be after this session ends. There is no `armed` event in phase
+            # 1, and recording the merge that has not happened is the one
+            # error this file cannot correct later.
+            return None
         return {"event": "merged", "unit": unit_from_branch(cmd),
                 "pr": pr_from_text(cmd) or pr_from_text(out)}
-    if "gh pr checks" in probe:
+    if runs_gh_pr(cmd, "checks"):
         verdict = ci_verdict(out)
         if verdict is None:
             return None        # still running: there is nothing to record yet

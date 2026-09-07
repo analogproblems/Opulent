@@ -1777,6 +1777,27 @@ PR_LANE_LEDGER = [
     ("a reviewer return with no verdict line records unknown",
      agent_return("opulent:reviewer", REVIEW_PROMPT, "I had a look around."),
      PRLANE_CFG_TEXT, [{"event": "reviewed", "verdict": "unknown"}]),
+    # ... and the verdict is read as anchored WORDS, not as substrings. The
+    # substring version called `UNSAFE` an approval: SAFE is in it, NOT is
+    # not. `UNSAFE` is not the charter's verdict line either way, so the
+    # honest record is `unknown` rather than a guess at which one was meant.
+    ("a reviewer return ending UNSAFE records unknown, never SAFE",
+     agent_return("opulent:reviewer", REVIEW_PROMPT,
+                  "This has a hole in it.\nUNSAFE"),
+     PRLANE_CFG_TEXT, [{"event": "reviewed", "verdict": "unknown"}]),
+    ("a lowercase not safe is still NOT SAFE",
+     agent_return("opulent:reviewer", REVIEW_PROMPT,
+                  "one critical\nnot safe to merge - 1 Critical"),
+     PRLANE_CFG_TEXT, [{"event": "reviewed", "verdict": "NOT SAFE"}]),
+    ("an all-caps SAFE TO MERGE is SAFE",
+     agent_return("opulent:reviewer", REVIEW_PROMPT, "clean\nSAFE TO MERGE"),
+     PRLANE_CFG_TEXT, [{"event": "reviewed", "verdict": "SAFE"}]),
+    # Only the LAST line is the verdict. A report that discusses what would
+    # have been NOT SAFE and then approves is an approval.
+    ("NOT SAFE in the body does not outvote a SAFE last line",
+     agent_return("opulent:reviewer", REVIEW_PROMPT,
+                  "Without the guard this would be NOT SAFE.\nSAFE to merge"),
+     PRLANE_CFG_TEXT, [{"event": "reviewed", "verdict": "SAFE"}]),
     # --- the gh commands ---
     ("gh pr create records pr_opened with the number from the URL",
      shell_return('gh pr create --head feat/w4-a --title "the unit" '
@@ -1793,6 +1814,27 @@ PR_LANE_LEDGER = [
     ("a quoted gh pr create records nothing",
      shell_return('echo "gh pr create --head feat/w4-a"',
                   "gh pr create --head feat/w4-a\n"), PRLANE_CFG_TEXT, []),
+    # ... and quoting is not the only way to mention one. The token has to sit
+    # at a COMMAND position: unquoted after `echo`, behind a `#`, or inside a
+    # heredoc'd PR body, it is text about a PR, not a PR.
+    ("an unquoted gh pr create after echo records nothing",
+     shell_return("echo gh pr create --head feat/w4-a",
+                  "gh pr create --head feat/w4-a\n"), PRLANE_CFG_TEXT, []),
+    ("a commented-out gh pr create records nothing",
+     shell_return("# gh pr create --head feat/w4-a\ngit status", ""),
+     PRLANE_CFG_TEXT, []),
+    ("gh pr create inside a heredoc body records nothing",
+     shell_return("cat > body.md <<'EOF'\nThen run gh pr create --fill\nEOF",
+                  ""), PRLANE_CFG_TEXT, []),
+    # The other direction, which is why this cannot just be "starts with gh":
+    # a real call reached through a prefix is a real call.
+    ("gh pr create after a cd is still pr_opened",
+     shell_return("cd repo && gh pr create --head feat/w4-a --fill",
+                  PR_URL + "\n"),
+     PRLANE_CFG_TEXT, [{"event": "pr_opened", "unit": "w4-a", "pr": 74}]),
+    ("gh pr merge behind an env assignment is still merged",
+     shell_return("GH_TOKEN=x gh pr merge 74 --squash", ""),
+     PRLANE_CFG_TEXT, [{"event": "merged", "pr": 74}]),
     ("a settled gh pr checks records ci/pass",
      shell_return("gh pr checks 74",
                   "CI\tpass\t1m\nselftests (ubuntu-latest)\tpass\t2m\n"),
@@ -1807,9 +1849,42 @@ PR_LANE_LEDGER = [
      shell_return("gh pr checks 74",
                   "CI\tpending\t0s\nselftests (macos-latest)\tpass\t2m\n"),
      PRLANE_CFG_TEXT, []),
+    # The verdict is the STATUS COLUMN of each row and nothing else. Scanned
+    # as whole text, the two rows below were failures: one because a job is
+    # named `fail-fast`, one because a run URL ends in `/failures`. A green
+    # PR reported as red is the reading that stops a merge that should happen.
+    ("a job named fail-fast does not make a green run red",
+     shell_return("gh pr checks 74",
+                  "fail-fast (ubuntu-latest)\tpass\t1m\nCI\tpass\t2m\n"),
+     PRLANE_CFG_TEXT, [{"event": "ci", "pr": 74, "verdict": "pass"}]),
+    ("a run URL containing failures does not make a green run red",
+     shell_return("gh pr checks 74",
+                  "CI\tpass\t1m\thttps://github.com/e/r/runs/1/failures\n"),
+     PRLANE_CFG_TEXT, [{"event": "ci", "pr": 74, "verdict": "pass"}]),
+    # No rows this can read is not a verdict either. `gh` prints a one-line
+    # summary in some modes, and guessing `pass` off prose is how a run
+    # nobody looked at becomes a green light.
+    ("gh pr checks output with no rows records nothing",
+     shell_return("gh pr checks 74", "All checks were successful\n"),
+     PRLANE_CFG_TEXT, []),
     ("gh pr merge records merged",
      shell_return("gh pr merge 74 --squash --delete-branch", ""),
      PRLANE_CFG_TEXT, [{"event": "merged", "pr": 74}]),
+    # ... and only a merge that happened. `gh` reporting a refusal is not the
+    # tool doing the thing, and `--auto` ARMS a merge for later — phase 1 has
+    # no event for "armed", so the honest record is none.
+    ("a gh pr merge that came back not mergeable records nothing",
+     shell_return("gh pr merge 74 --squash",
+                  "X Pull request #74 is not mergeable: the merge commit "
+                  "cannot be cleanly created.\n"), PRLANE_CFG_TEXT, []),
+    ("gh pr merge --auto records nothing",
+     shell_return("gh pr merge 74 --auto --squash",
+                  "Pull request #74 will be automatically merged when all "
+                  "requirements are met\n"), PRLANE_CFG_TEXT, []),
+    ("a gh pr create that came back a GraphQL error records nothing",
+     shell_return("gh pr create --head feat/w4-a --fill",
+                  "GraphQL: No commits between main and feat/w4-a "
+                  "(createPullRequest)\n"), PRLANE_CFG_TEXT, []),
     ("an ordinary command in a pr-lane project records nothing",
      shell_return("cargo test", "test result: ok. 12 passed\n"),
      PRLANE_CFG_TEXT, []),
@@ -1852,6 +1927,13 @@ for _desc, _payload, _config, _want in PR_LANE_LEDGER:
 # The ledger is not the routing log and never borrows its file: a recorded
 # unit must leave the routing log exactly as it found it. Asserted with a real
 # log file rather than the null device, because "no lines" is the claim.
+#
+# On its own this row proves only half of that — `delegate` is what the same
+# payload logs with no pr-lane config at all, so it would stay green if the
+# recorder had done nothing whatsoever. It is load-bearing WITH its
+# neighbours: the table above has just asserted that this exact payload
+# writes one `coded` line to the ledger, and this says the routing log did
+# not grow a second copy of it.
 _root = prlane_project()
 _body = dict(agent_return("opulent:coder", BRIEF, CODER_REPORT))
 _body["cwd"] = _root
@@ -1859,6 +1941,35 @@ _decision, _routing = logged(_body, {"CLAUDE_PROJECT_DIR": _root})
 extra("a recorded pr-lane unit writes one delegate line and no more",
       _decision == "allow" and [e.get("event") for e in _routing] == ["delegate"],
       "allow/['delegate']", f"{_decision}/{[e.get('event') for e in _routing]}")
+
+# The project root is resolved through the same MSYS mapping the routing hook
+# applies to write targets. Without it, Git Bash's own default spelling of a
+# Windows path — `/c/Users/...`, which is what `cwd` carries when a session is
+# driven from that shell — normalises to `\c\Users\...`, the config lookup
+# misses, and the whole module is silently off in the one shell this plugin's
+# own project is driven from. `CLAUDE_PROJECT_DIR` is deliberately NOT set
+# here: the payload's cwd is the fallback source, and it is the one that
+# arrives MSYS-spelled.
+_desc = "an MSYS-spelled cwd still finds the pr-lane config"
+if sys.platform == "win32":
+    _root = prlane_project()
+    _drive, _rest = os.path.splitdrive(_root)
+    _msys = "/" + _drive[0].lower() + _rest.replace("\\", "/")
+    _body = dict(agent_return("opulent:coder", BRIEF, CODER_REPORT))
+    _body["cwd"] = _msys
+    _got = run(_body)
+    try:
+        with open(os.path.join(_root, ".claude", "pr-lane", "ledger.jsonl"),
+                  encoding="utf-8") as fh:
+            _records = [json.loads(l) for l in fh if l.strip()]
+    except OSError:
+        _records = []
+    extra(_desc,
+          _got == "allow" and [r.get("event") for r in _records] == ["coded"],
+          "allow/['coded']", f"{_got}/{[r.get('event') for r in _records]}")
+else:
+    print(f"SKIP  {_desc}: on {sys.platform} `/c/Users/x` is an ordinary "
+          f"directory and reading it as a drive would be the bug")
 
 total = (len(CASES) + len(TELEMETRY) + len(REASONS) + len(LOG_GUARD_CASES)
          + extra_checks)
