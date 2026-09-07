@@ -57,16 +57,16 @@ Here is exactly where your tasks go:
 | **All complex implementation** | `opulent:coder` | Opus, Effort: xHigh |
 | **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet, Effort: xHigh |
 | **Tests, builds, linters** | `opulent:test-runner` | Sonnet, Effort: High (no edit tools) |
-| **Code review before merge** | `opulent:reviewer` | Opus, Effort: High (no edit tools) |
+| **Code review before merge** | `opulent:reviewer` | Opus, Effort: High (edit tools for its memory only) |
 | **Locating code and structure** | *Built-in `Explore` agent* | Claude Code's own read-only searcher |
 
-*A lane whose definition lists no tools (`opulent:coder`, `opulent:mechanic`) inherits all tools; `opulent:test-runner` and `opulent:reviewer` list read-only tools on purpose.*
+*A lane whose definition lists no tools (`opulent:coder`, `opulent:mechanic`) inherits all tools. `opulent:test-runner` lists read-only tools on purpose. `opulent:reviewer` lists the same four, and the harness adds Write and Edit because it keeps a project memory; its charter confines them to that memory directory.*
 
 **Implementation isn't a choice.** `opulent:coder` at `xhigh` — Anthropic's recommended setting for coding — takes every non-trivial change. There is no rung above it and nothing to escalate to, which means there is no routing decision left to get wrong.
 
 **Hazards moved from routing to briefing.** Earlier versions escalated concurrency, auth or crypto, data migrations, money and public contracts to a `max`-effort second lane. That lane is gone, but the list isn't — it now tells you when a brief has to be written carefully rather than which agent to spawn. Name the hazard, say what must not break, and name the check that would catch it if it did; the lane can't ask you a follow-up question, so a hazard you didn't mention is one it doesn't know about. If its output fails review, the answer is a better brief or your own hands — not a bigger lane.
 
-**Review is a lane, and it can't edit.** `opulent:reviewer` runs on Opus at `high` with Read, Grep, Glob and a read-only Bash, because a reviewer that can fix stops reporting. Its charter is the test-runner's stance turned on a diff: report every finding, labelled by confidence, and let the architect filter. It also checks the two things ad-hoc reviewers usually skip — whether the brief's named hazard has a check in the diff that would actually fail, and whether a red-then-green claim is real. Debugging is deliberately *not* a lane: `opulent:test-runner` diagnoses, the architect decides, `opulent:coder` fixes with the diagnosis in its brief.
+**Review is a lane, and it does not fix.** `opulent:reviewer` runs on Opus at `high` with Read, Grep, Glob and a read-only Bash — plus the Write and Edit the harness grants for its project memory, which its charter confines to that directory — because a reviewer that fixes stops reporting. Its charter is the test-runner's stance turned on a diff: report every finding, labelled by confidence, and let the architect filter. It also checks the two things ad-hoc reviewers usually skip — whether the brief's named hazard has a check in the diff that would actually fail, and whether a red-then-green claim is real. Debugging is deliberately *not* a lane: `opulent:test-runner` diagnoses, the architect decides, `opulent:coder` fixes with the diagnosis in its brief.
 
 **Two jobs are deliberately not lanes.** The architect keeps both, for the same reason.
 
@@ -97,6 +97,44 @@ agent("update the config files", {
 ...instead of a bare `agent("update the config files")`. Naming the lane is what hands the job that lane's charter and tool restrictions; spelling out the model and effort alongside it is cheap insurance, since the docs don't quite say whether a lane's own pins survive that boundary unstated.
 
 **Being straight with you:** this one is guidance, not enforcement. Nothing can see inside a running workflow, so if your architect forgets to name a lane, there's no denial and no log line — it just quietly costs more. It's the only part of Opulent that works because the model reads the policy and agrees with it, rather than because something checks. Worth eyeballing the script on your first big fan-out.
+
+---
+
+## 🧵 pr-lane (opt-in; phase 1 records)
+
+Some projects ship every change as one reviewed PR per unit — one implementation lane in an isolated worktree off the base branch, a test that is red before the change and green after, a review before the PR opens, a compile of the merged tree when the base has moved, every CI leg green, then a merge. Opulent 0.25.0 makes that process survive a session. Create `.claude/pr-lane.json` in a project and three things happen:
+
+* **The policy grows a block** describing the loop and a **brief contract** (marker line `PR-LANE CONTRACT v1`) that the architect pastes verbatim into every implementation brief. The contract is filled from the config: base branch, step-zero / check / test / lint commands, the shared-machine lock directory and build target, the commit identity and trailer, the PR footer, who merges.
+* **The routing hook keeps a ledger** at `.claude/pr-lane/ledger.jsonl`, appending one line per observed event: `coded` when `opulent:coder` or `opulent:mechanic` returns from a brief that carried the marker, `reviewed` (with SAFE / NOT SAFE) when the configured review provider returns, `pr_opened` / `ci` / `merged` when it sees `gh pr create`, `gh pr checks` settle, or `gh pr merge` go past. Recorded after the tool succeeded, like the routing log; never inferred. The architect may append two events itself, `unit_defined` and `handed_off`.
+* **`/opulent:pr-lane` renders it** — one line per unit with its latest event, verdict, PR, CI, branch and SHA, then what is blocked on what. The session-start summary line comes from the same renderer, so a new session knows where every unit stands without a plan file.
+
+**What phase 1 does not do, so absence is never read as a verdict:** it does not deny `gh pr merge` or a push to the base branch, does not gate the end of a turn, does not sweep issues, does not arm auto-merge, and does not remove worktrees. Those are phases 2 and 3. It denies exactly one new thing, and does so whether or not a project opted in: a main-loop write to `.claude/pr-lane.json`, because that file is configuration like `settings.json` and the write that creates it is the one to deny. Without the config the two hooks are byte-identical to 0.24.0 — `tests/ci_checks.py` asserts it against the 0.24.0 script.
+
+Two honest limits of a record built from observation: a review spawned without a `unit:` line in its brief renders as `(unattached)`; a unit implemented from a brief that lacked the marker is simply not in the ledger. Both are gaps in the record, not claims about the work.
+
+A config, every key optional except `schema`. `${SCRATCHPAD}` expands to `CLAUDE_SCRATCHPAD_DIR`, `CLAUDE_SCRATCHPAD` or `OPULENT_SCRATCHPAD` if one is set, else the system temp directory — so a build lock defaults to machine-wide, which is what a shared lock wants:
+
+```json
+{
+  "schema": "pr-lane/1",
+  "base": "main",
+  "commands": { "step_zero": "scripts/web-build.ps1",
+                "check": "cargo check --all-targets",
+                "test":  "cargo test",
+                "lint":  "cargo clippy --all-targets -- -D warnings" },
+  "shared_machine": { "lock_dir": "${SCRATCHPAD}/build-lock",
+                      "target_dir": "C:/src/project/target", "max_lanes_building": 2 },
+  "git": { "user": "Your Org", "email": "hello@example.com",
+           "trailer": "Co-Authored-By: Claude <noreply@anthropic.com>",
+           "never_commit": [".claude/agent-memory/**"] },
+  "pr": { "merge": "architect", "method": "squash",
+          "footer": "🤖 Generated with [Claude Code](https://claude.com/claude-code)" },
+  "review": { "provider": "opulent:reviewer" },
+  "hazards": ["concurrency", "auth", "crypto", "migration", "money", "public-contract"]
+}
+```
+
+`pr.merge` is `architect`, `user` or `auto` (`auto` is accepted and does nothing yet); a brief's `hazard:` line names one of `hazards` or `none`, and a hazard PR is merged by the user whatever `pr.merge` says.
 
 ---
 

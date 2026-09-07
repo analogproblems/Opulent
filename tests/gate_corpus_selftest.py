@@ -140,6 +140,13 @@ def new_repo(name):
     return repo
 
 
+def _git_locks(directory, names):
+    # Only git's transient locks under .git/ are skipped; a corpus file
+    # named *.lock anywhere else is residue the gate must still see.
+    parts = os.path.normpath(directory).split(os.sep)
+    return [n for n in names if n.endswith(".lock")] if ".git" in parts else []
+
+
 # --- fixtures, one per blind spot -------------------------------------------
 
 def merge_resolution(repo):
@@ -189,8 +196,7 @@ def committer_identity(repo):
     """Residue in the COMMITTER field while the author is clean. Default
     `git log` prints Author: only; GitHub shows both."""
     p = subprocess.run(
-        ["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t",
-         "-c", "commit.gpgsign=false",
+        ["git", "-C", repo, *GIT_CONF,
          "-c", f"committer.name={SECRET}", "-c", f"committer.email={SECRET}@x.invalid",
          "commit", "-q", "--allow-empty", "-m", "clean message"],
         capture_output=True, text=True,
@@ -324,7 +330,7 @@ def main():
     # token few. A fixture with four of these leaked "zebr" and looked clean.
     holder = os.path.join(ROOT, "İ" * (len(SECRET) + 2) + SECRET + "-work")
     # Belt for the same race: a lock file is never part of the corpus.
-    shutil.copytree(repo, holder, ignore=shutil.ignore_patterns("*.lock"))
+    shutil.copytree(repo, holder, ignore=_git_locks)
     code, out = run_gate(holder, SECRET)
     leaked = SECRET.lower() in out.lower()
     print(f"{'FAIL' if leaked else 'PASS'}  a term after a length-changing "

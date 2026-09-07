@@ -12,7 +12,33 @@ Versions are pinnable via git tags in the form `{plugin}--v{version}`
 
 ## opulent 0.25.0 — 2026-09-07
 
-_(entry pending — architect)_
+**A PR lane, opt-in, and in phase 1 it records.** The origin is a process that
+shipped 26 pull requests in four days by hand: one implementation lane per
+unit in an isolated worktree, red-then-green evidence, a review before the PR
+opened, a compile of the merged tree when the base had moved, every CI leg
+green, then a merge. Everything that made it resumable lived in a plan file
+and a scratchpad, both of which die with the session. A project that creates
+`.claude/pr-lane.json` now gets the loop and the brief contract in its policy
+at session start, a ledger under `.claude/pr-lane/` that the routing hook
+appends to as it watches coder returns, reviewer verdicts and `gh pr` calls go
+past, and `/opulent:pr-lane` to render where every unit stands. Nothing in it
+decides: phase 1 adds one denial — writing the config itself from the main
+loop, because configuration is the control plane — and otherwise records.
+Without the file the hooks are byte-identical to 0.24.0, and `ci_checks.py`
+asserts that against the 0.24.0 script rather than against a copy of its text.
+
+**The reviewer's "read-only" was true by charter, not by construction.** A
+definition that carries `memory:` is granted Write and Edit by the harness so
+the lane can keep its notes; 0.23.0 said the reviewer had no edit tools. The
+charter now says what is true — the tools exist for the memory directory and
+for nothing else — and the README rows say the same. Memory stays: three
+waves of a project's review conventions are worth more than the symmetry.
+
+**Two fixture fixes** from reviewing the last release: the one corpus commit
+that hand-rolled its git arguments now shares `GIT_CONF`, so no fixture commit
+can spawn the background gc that raced the macOS copy; and the copy skips
+`*.lock` only inside `.git/`, so a corpus file that happens to carry that
+suffix is still residue the gate must see.
 
 ## opulent 0.24.0 — 2026-09-07
 

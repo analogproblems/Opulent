@@ -78,6 +78,12 @@ failed.
    same update-and-restart as version drift below. A high `edit` count is
    not a fault: it is the main loop working with the record intact.
 
+6. **pr-lane (only when `.claude/pr-lane.json` exists in the project).** Run
+   `python3 "${CLAUDE_PLUGIN_ROOT}/hooks/pr_lane.py" || python "${CLAUDE_PLUGIN_ROOT}/hooks/pr_lane.py"`
+   and report two lines from its output: whether the config parsed (and with which base, merge
+   mode and review provider), and whether the ledger is readable and how many records it holds.
+   No config → say "pr-lane: off (no config)" and nothing else; it is not part of the verdict.
+
 Verdict, one line: **LIVE** · **PARTIAL** (say which half works) · **DEAD**
 (installed but not enforcing — recommend checking the plugin's enable state
 in /plugin, restarting the session so hooks reload, and — for version drift —
