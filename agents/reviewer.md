@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Code review before merge — correctness, security, contract and test-quality findings on a diff, ranked and evidenced. MUST BE USED after any non-trivial change before the architect declares it done; the main loop does not review its own lanes' work. Read-only: it reports, it never fixes.
+description: "Code review before merge — correctness, security, contract and test-quality findings on a diff, ranked and evidenced. MUST BE USED after any non-trivial change before the architect declares it done; the main loop does not review its own lanes' work. Read-only: it reports, it never fixes."
 model: opus
 effort: high
 tools: Read, Grep, Glob, Bash
