@@ -36,7 +36,8 @@ run through it was denied or recorded. It is matched now, conservatively and
 honestly: a command whose text names a control-plane path is denied — as one
 literal, or as `.claude` and a control-plane name together in a write-shaped
 command; a path built from a variable set earlier is beyond it, as it is beyond
-the Bash guard; a command that looks like it writes is recorded as `unparsed`,
+the Bash guard; so is any spelling only a parser could see, and the test file
+pins the ones found; a command that looks like it writes is recorded as `unparsed`,
 the vocabulary's own word for a write the parser could not read; and the
 test-run recogniser, which is textual, logs `cargo test` from either shell.
 There is no PowerShell parser, and the log does not pretend there is. The doctor gains a PowerShell canary, so an

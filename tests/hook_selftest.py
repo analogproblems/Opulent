@@ -253,6 +253,12 @@ FAKE_HOOKS_CWD = os.path.join(PATCH_DIR, "fake", ".claude", "hooks")
 # created on disk, like FAKE_HOOKS_CWD — nothing in the judged path touches
 # the filesystem.
 FAKE_CLAUDE_CWD = os.path.dirname(FAKE_HOOKS_CWD)
+# The same hooks/ cwd with one extra dot. On Windows that IS the hooks
+# directory — Win32 strips trailing dots off every path component — and it is
+# not creatable through any normal API, which is exactly why it is only ever
+# a string here. On POSIX it is a genuinely different directory and the rows
+# using it are skipped out loud.
+FAKE_DOTHOOKS_CWD = FAKE_HOOKS_CWD + "."
 FAKE_PROJ_CWD = os.path.join(PATCH_DIR, "fake", "project")
 
 # Patches name their targets inside the file, so these are the only place the
@@ -797,6 +803,61 @@ CASES = [
     # shape.
     ("PowerShell relative write in a control-plane cwd is denied",
      powershell("Set-Content y.py -Value x", cwd=FAKE_HOOKS_CWD),                       "deny"),
+    # --- the plugins/data carve-out is ADJACENCY, not word presence ---
+    # It used to ask whether the atom `data` appeared ANYWHERE in the command
+    # text — including inside a -Value payload or a trailing comment — so one
+    # word in the wrong place bought a write to the file that decides which
+    # plugins load at all. Both rows below were measured ALLOWED. The single-
+    # literal spelling of the same path was denied by is_control_plane the
+    # whole time, so the two halves of one rule disagreed. Not win32-gated:
+    # adjacency has nothing to do with the platform.
+    ("PowerShell plugins/ write with data only in -Value is denied",
+     powershell('Set-Content -Path (Join-Path $HOME ".claude" "plugins" '
+                '"installed_plugins.json") -Value "data"', cwd=CWD),                    "deny"),
+    ("PowerShell plugins/ write with data only in a comment is denied",
+     powershell('Set-Content -Path (Join-Path $HOME ".claude" "plugins" '
+                '"installed_plugins.json") -Value "x" # data', cwd=CWD),                "deny"),
+    # And the carve-out itself, spelled the other way a real path spells it:
+    # adjacency is read over ATOMS, not over the quoted argument list, so one
+    # argument holding `plugins\data` still qualifies. A token-level adjacency
+    # rule would deny this and break every plugin that keeps state.
+    ("PowerShell backslash-spelled plugins\\data write is still allowed",
+     powershell('Set-Content (Join-Path $HOME ".claude" "plugins\\data" '
+                '"s.json") -Value x', cwd=CWD),                                         "allow"),
+    # --- a non-string cwd must not disable the branch ---
+    # `cwd` arrived from the payload uncoerced, so a non-string one raised
+    # inside _resolve and fell to the module's blanket fail-open: the call was
+    # ALLOWED with no log line at all, and BOTH shells' control-plane checks
+    # were skipped whole. Measured — the third row here was allowed with a
+    # fully spelled-out absolute path to a hook. str() at the read site, the
+    # same treatment subagent_type already got.
+    ("PowerShell read with a non-string cwd is allowed",
+     {"tool_name": "PowerShell", "tool_input": {"command": "Get-ChildItem"},
+      "cwd": 42},                                                                       "allow"),
+    # "42" is a relative path: resolved under the hook process's own cwd, it
+    # names nothing in the control plane, so allow is the right answer here —
+    # what changed is that the branch RAN to reach it.
+    ("PowerShell relative write with a non-string cwd is allowed",
+     {"tool_name": "PowerShell", "tool_input": {"command": "Set-Content y.py -Value x"},
+      "cwd": 42},                                                                       "allow"),
+    ("PowerShell control-plane write with a non-string cwd is still denied",
+     {"tool_name": "PowerShell",
+      "tool_input": {"command": 'Set-Content -Path ' + q(WIN_HOOK) + ' -Value x'},
+      "cwd": 42},                                                                       "deny"),
+    ("Bash control-plane write with a non-string cwd is still denied",
+     {"tool_name": "Bash",
+      "tool_input": {"command": "echo x > " + q(WIN_HOOK)}, "cwd": 42},                 "deny"),
+    # --- Windows strips a trailing dot; the guard has to know that ---
+    # `~/.claude/hooks./evil.py` lands inside the real hooks directory on
+    # Windows (measured with New-Item on a real machine) and in a genuinely
+    # different directory on POSIX. So this row asserts the PLATFORM's own
+    # reading, the way the MSYS row below does: it can only be wrong in one
+    # direction on each, and neither platform is left uncovered. The POSIX
+    # half is the false-positive guard — `hooks.` there must stay ordinary.
+    ("a trailing dot on a Bash-spelled hooks/ is judged at the platform's own "
+     "reading",
+     bash("echo x > ~/.claude/hooks./evil.py", cwd=CWD),
+     "deny" if sys.platform == "win32" else "allow"),
     # --- delegation routing: unchanged, this was never the lockout ---
     ("main Task->Explore allowed",   task("Explore"),                                   "allow"),
     ("main Agent->Explore allowed",  {"tool_name": "Agent",
@@ -1284,6 +1345,20 @@ TELEMETRY = [
     ("a literal-built control-plane read records nothing",
      post(powershell('Get-Content (Join-Path $HOME ".claude" "hooks" "x.py")',
                      cwd=CWD)), "allow", []),
+    # The adjacency fix adds no event name of its own: a plugins/ write whose
+    # `data` is not the next component is the same `deny`, naming `plugins`
+    # as the literal it objected to.
+    ("a non-adjacent plugins/data denial logs one deny naming plugins",
+     pre(powershell('Set-Content -Path (Join-Path $HOME ".claude" "plugins" '
+                    '"installed_plugins.json") -Value "data"', cwd=CWD)),
+     "deny", ["deny"], "control:.claude+plugins"),
+    # A non-string cwd used to raise inside _resolve and take the whole branch
+    # out through the module's fail-open, leaving NO line — so the record half
+    # is asserted too, not just the verdict.
+    ("a relative write with a non-string cwd records exactly one unparsed",
+     post({"tool_name": "PowerShell",
+           "tool_input": {"command": "Set-Content y.py -Value x"}, "cwd": 42}),
+     "allow", ["unparsed"], "powershell: Set-Content y.py -Value x"),
 ]
 
 for case in TELEMETRY:
@@ -1520,6 +1595,42 @@ if sys.platform == "win32":
 else:
     print(f"SKIP  MSYS-spelled routing log is guarded: {sys.platform} has no "
           f"MSYS drive spelling, and /c/Users there is an ordinary directory")
+
+# --- Win32 strips trailing dots and spaces off every path component, so one
+# extra `.` used to walk past all three PowerShell checks at once: _ps_pathish
+# never called `hooks.` path-ish, the co-occurrence rule's literals never
+# matched, and the cwd rule compared a cwd whose last component still had the
+# dot on it. All four rows below were measured ALLOWED against b025c69, and
+# the underlying claim was measured on a real machine: `New-Item -Path
+# '...\hooks.\probe.txt'` creates the file inside the real hooks directory,
+# and `'...\.claude.\hooks\evil.py'` lands in the real .claude one.
+#
+# Windows-only semantics, so skipped out loud elsewhere: on POSIX `hooks.` and
+# `.claude.` are genuinely different directories and every row here is
+# correctly ALLOWED there — counting them on the Linux and macOS legs would
+# report coverage those legs do not have. The Bash spelling of the same trap
+# is a CASES row instead, asserted at each platform's own reading, so the
+# POSIX side is not left unpinned.
+_DOT_CASES = [
+    ("a bare hooks. in a .claude cwd is denied",
+     powershell("Remove-Item hooks. -Recurse -Force", cwd=FAKE_CLAUDE_CWD)),
+    ("a literal-built hooks. destination is denied",
+     powershell('Set-Content -Path (Join-Path $HOME ".claude" "hooks.") '
+                '-Value x', cwd=CWD)),
+    ("a literal-built .claude. path is denied",
+     powershell('Set-Content -Path (Join-Path $HOME ".claude." "hooks" '
+                '"evil.py") -Value x', cwd=CWD)),
+    ("a write from a hooks.-spelled control-plane cwd is denied",
+     powershell("Set-Content y.py -Value x", cwd=FAKE_DOTHOOKS_CWD)),
+]
+if sys.platform == "win32":
+    for _desc, _payload in _DOT_CASES:
+        _got = run(_payload)
+        extra(_desc, _got == "deny", "deny", _got)
+else:
+    for _desc, _ in _DOT_CASES:
+        print(f"SKIP  {_desc}: on {sys.platform} a trailing dot names a "
+              f"different directory, and allowing it is the correct answer")
 
 total = (len(CASES) + len(TELEMETRY) + len(REASONS) + len(LOG_GUARD_CASES)
          + extra_checks)

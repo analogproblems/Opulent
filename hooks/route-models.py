@@ -359,6 +359,40 @@ def _msys_drive(p):
     return m.group(1).upper() + ":\\" + p[3:] if m else p
 
 
+# Win32 strips trailing dots and spaces off every path component, so `hooks.`
+# IS `hooks` and `.claude.` IS `.claude` — measured on this machine, where
+# `New-Item -Path '...\hooks.\probe.txt'` lands inside the real hooks
+# directory and `'...\.claude.\hooks\evil.py'` lands in the real .claude one.
+# Nothing else in this file knew that: normpath keeps the dot, and every rule
+# here decides by comparing a component against an exact name — `.claude`, the
+# control-plane directory names, the settings pattern, the log's basename — so
+# ONE extra dot walked past all of them, on both shells. POSIX has no such
+# rule, and there `hooks.` is a genuinely different directory that must stay
+# one; hence the platform guard, the same one _msys_drive carries.
+_WIN_SEG_RE = re.compile(r"[^\\/]+")
+
+
+def _win_segment(seg):
+    """One path component as Win32 will actually resolve it. Identity off
+    win32."""
+    return seg.rstrip(". ") if sys.platform == "win32" else seg
+
+
+def _win_path(p):
+    """The same normalisation applied component-wise to a whole path, for the
+    comparisons that hold a resolved path rather than a component. A component
+    that is nothing BUT dots (`.`, `..`) is left alone: normpath has already
+    resolved those, and emptying one here would join two unrelated names."""
+    if sys.platform != "win32":
+        return p
+    return _WIN_SEG_RE.sub(lambda m: _win_segment(m.group(0)) or m.group(0), p)
+
+
+# The log's self-guard compares whole resolved paths, so its constant is
+# normalised once, here, against the same rule.
+_LOG_CMP = _win_path(_LOG_NORM)
+
+
 def _resolve(target, cwd=None):
     """Absolute, normalized path for a write target. No filesystem access:
     normpath rather than realpath, so a backslash cwd and a forward-slash
@@ -412,7 +446,14 @@ def is_control_plane(target, cwd=None):
     base = os.path.basename(p).lower()
     if base.startswith(".env") and not base.endswith(_ENV_TEMPLATE_SUFFIXES):
         return True
-    parts = [q.lower() for q in p.replace("\\", "/").split("/")]
+    # Every component through _win_segment first: on Windows `hooks.` and
+    # `.claude.` name the very directories below, and comparing the spelling
+    # with the dot still on it matched none of them. The `or` keeps an
+    # all-dots component intact, the way _win_path does: normpath has already
+    # resolved those, and emptying one here would only let the two helpers
+    # disagree about the same path.
+    parts = [_win_segment(q.lower()) or q.lower()
+             for q in p.replace("\\", "/").split("/")]
     for i, part in enumerate(parts):
         if part != ".claude" or i + 1 >= len(parts):
             continue
@@ -1081,7 +1122,7 @@ _PS_TOKEN_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"|([^\s'\"]+)")
 _PS_ATOM_SPLIT_RE = re.compile(r"[^A-Za-z0-9_.\-]+")
 # The log's own basename, so a relatively-spelled OPULENT_LOG is still
 # recognised by _ps_pathish below (an absolute one always carries a separator).
-_LOG_BASE = posixpath.basename(_LOG_NORM.replace("\\", "/")).lower()
+_LOG_BASE = _win_segment(posixpath.basename(_LOG_NORM.replace("\\", "/")).lower())
 
 
 def _ps_text(cmd):
@@ -1125,10 +1166,15 @@ def _ps_pathish(tok):
     directory itself, and is_control_plane judges what is UNDER a .claude
     directory, so a command naming only the directory is allowed here exactly
     as `rm -rf ~/.claude` is allowed on the Bash side. Same rule, both
-    shells."""
+    shells.
+
+    The bare name is read through _win_segment, because on Windows `hooks.`
+    IS the hooks directory: without that, `Remove-Item hooks. -Recurse -Force`
+    from a .claude cwd was not even path-ish, so nothing resolved it and the
+    paragraph above was one dot from being decorative."""
     if "/" in tok:
         return True
-    low = tok.lower()
+    low = _win_segment(tok.lower())
     return (low.startswith(".env") or bool(_SETTINGS_RE.match(low))
             or low in _CONTROL_BASENAMES or low in _CONTROL_SUBDIRS
             or low == ".claude"
@@ -1152,11 +1198,20 @@ def _ps_writes(cmd):
     return ">" in cmd or any(t in low for t in _PS_WRITE_TOKENS)
 
 
+def _ps_atoms(cmd):
+    """Every name-shaped atom in a command, lowercased, win32-normalised and
+    in PROGRAM ORDER — its own tokens, the contents of its quoted strings, and
+    the segments of its paths, which after _ps_text are all just runs of name
+    characters. Order matters to the plugins/data carve-out below, which is an
+    ADJACENCY rule: as a set it read `-Value "data"` and a trailing `# data`
+    as if they were the path component after `plugins`."""
+    return [_win_segment(a.lower()) or a.lower()
+            for a in _PS_ATOM_SPLIT_RE.split(_ps_text(cmd)) if a]
+
+
 def _ps_names(cmd):
-    """Every name-shaped atom in a command, lowercased — its own tokens, the
-    contents of its quoted strings, and the segments of its paths, which after
-    _ps_text are all just runs of name characters."""
-    return set(a.lower() for a in _PS_ATOM_SPLIT_RE.split(_ps_text(cmd)) if a)
+    """The same atoms as a set, for the membership checks."""
+    return set(_ps_atoms(cmd))
 
 
 # The co-occurrence rule, and the honest limit it draws.
@@ -1176,10 +1231,13 @@ def _ps_names(cmd):
 # because in every one of them the literals are still in the text.
 #
 # It is the strongest claim a text-level guard can make without a parser, and
-# it stops exactly where the Bash guard stops: a destination built from a
-# variable assigned in an EARLIER tool call is beyond both — `d=~/.claude/hooks;
-# cp x "$d/y"` is allowed by the Bash branch too, measured, not assumed — and
-# the README says so rather than implying parity.
+# it stops where text stops. A destination built from a variable assigned in an
+# EARLIER tool call is beyond it, as it is beyond the Bash guard —
+# `d=~/.claude/hooks; cp x "$d/y"` is allowed there too, measured, not assumed
+# — and so is any other spelling only a PowerShell parser could see, because
+# what this reads is the text. The rule is a seatbelt, not a boundary; the
+# known spellings are pinned in tests/hook_selftest.py, and the README says so
+# rather than implying parity or completeness.
 #
 # Write-shaped only. A `Get-Content` that mentions both is a read, and
 # refusing reads on a word count would cost far more than it buys. The price
@@ -1192,17 +1250,28 @@ def _ps_cooccurring_control(cmd):
     literal `.claude`, or None. The name sets are is_control_plane's own, so
     the two cannot drift; the order is fixed so the denial names the same
     literal every time."""
-    names = _ps_names(cmd)
+    atoms = _ps_atoms(cmd)
+    names = set(atoms)
     if ".claude" not in names:
         return None
     for sub in sorted(_CONTROL_SUBDIRS - {"plugins"}):
         if sub in names:
             return sub
     # plugins/data is CLAUDE_PLUGIN_DATA — a plugin's own state, not rules.
-    # is_control_plane carves it out of the resolved path; the same carve-out
-    # is made here for the literals, so a write into a plugin's data dir built
-    # from Join-Path is allowed exactly as the spelled-out path is.
-    if "plugins" in names and "data" not in names:
+    # is_control_plane carves it out of the resolved path, and the same
+    # carve-out is made here for the literals — but as ADJACENCY, not
+    # presence: it applies only when a `plugins` atom is IMMEDIATELY followed
+    # by `data`, which is the only arrangement that can spell the directory.
+    # `plugins/data`, `"plugins" "data"` and `plugins\data` all qualify.
+    # `data` merely present somewhere in the text does not, and the presence
+    # spelling was a live hole: `Set-Content -Path (Join-Path $HOME ".claude"
+    # "plugins" "installed_plugins.json") -Value "data"` overwrote the file
+    # that decides which plugins load at all, and so did the same command with
+    # a trailing `# data`. The single-literal spelling of that path was denied
+    # by is_control_plane the whole time, so the two disagreed.
+    if "plugins" in names and not any(
+            a == "plugins" and atoms[i + 1:i + 2] == ["data"]
+            for i, a in enumerate(atoms)):
         return "plugins"
     for n in sorted(names):
         if (n in _CONTROL_BASENAMES or _SETTINGS_RE.match(n)
@@ -1252,7 +1321,11 @@ def main():
 
     tool = payload.get("tool_name", "")
     tin = payload.get("tool_input") or {}
-    cwd = payload.get("cwd") or os.getcwd()
+    # str(), for the same reason subagent_type is coerced below: a non-string
+    # cwd reached _resolve unchanged, where `.startswith` on an int raised and
+    # the module's blanket fail-open swallowed it — allowing the call with NO
+    # log line, and taking the whole Bash and PowerShell branch with it.
+    cwd = str(payload.get("cwd") or os.getcwd())
 
     if tool in ("Task", "Agent"):
         st = tin.get("subagent_type") or ""
@@ -1295,7 +1368,7 @@ def main():
             allow("edit", p)
         if is_control_plane(p, cwd):
             deny(CONTROL_PLANE_DENIAL % p, "control:" + p)
-        if _LOG_GUARDED and p == _LOG_NORM:
+        if _LOG_GUARDED and _win_path(p) == _LOG_CMP:
             deny(LOG_DENIAL % p, "log:" + p)
         allow()
 
@@ -1322,12 +1395,12 @@ def main():
             for t, rp in pairs:
                 if os.path.basename(rp) == CANARY:
                     deny(CANARY_DENIAL, "canary:" + rp, event="probe")
-                if _LOG_GUARDED and rp == _LOG_NORM:
+                if _LOG_GUARDED and _win_path(rp) == _LOG_CMP:
                     deny(LOG_DENIAL % rp, "log:" + rp)
                 if is_control_plane(rp, eff_cwd):
                     deny(CONTROL_PLANE_DENIAL % rp, "control:" + rp)
             for p, rp in rm_pairs:
-                if _LOG_GUARDED and rp == _LOG_NORM:
+                if _LOG_GUARDED and _win_path(rp) == _LOG_CMP:
                     deny(LOG_DENIAL % rp, "log:" + rp)
             allow()
         # The record, after the fact: scratch stays out, an mv is shown as
@@ -1384,7 +1457,7 @@ def main():
                 if not _ps_pathish(tok):
                     continue
                 rp = _resolve(tok, cwd)
-                if _LOG_GUARDED and rp == _LOG_NORM:
+                if _LOG_GUARDED and _win_path(rp) == _LOG_CMP:
                     deny(LOG_DENIAL % rp, "log:" + rp)
                 if is_control_plane(rp, cwd):
                     deny(CONTROL_PLANE_DENIAL % rp, "control:" + rp)
