@@ -12,7 +12,8 @@ failed.
    copy under `~/.claude/plugins/` and flag the anomaly.
 
 2. **Agents registered.** From your own available-agents list: are
-   `opulent:coder`, `opulent:mechanic`, and `opulent:test-runner` present?
+   `opulent:coder`, `opulent:mechanic`, `opulent:test-runner`, and
+   `opulent:reviewer` present?
    Name any that are missing. (Implementation is one lane with no rung above
    it. Exploration uses the built-in `Explore` agent, and documentation and
    visual verification both stay in the main loop — none of those is an

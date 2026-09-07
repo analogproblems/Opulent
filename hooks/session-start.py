@@ -18,6 +18,7 @@ The main conversation is the architect/orchestrator only. Delegate execution:
 - Complex implementation -> `opulent:coder` agent (Opus, effort xhigh). Give it a full spec: files, approach, constraints. It is the only implementation lane.
 - Routine/mechanical edits -> `opulent:mechanic` agent (Sonnet). Give exact instructions.
 - Tests, builds, linters, typechecks -> `opulent:test-runner` agent (Sonnet). Delegate anything beyond a quick one-off check.
+- Code review before merge -> `opulent:reviewer` agent (Opus, effort high, read-only tools). Every non-trivial change is reviewed before it is called done; you read the findings and decide which to act on.
 - Reading/searching/exploration -> the built-in `Explore` agent for anything beyond a single known file.
 
 Implementation is not a choice: every non-trivial change goes to `opulent:coder`, and there is no
@@ -32,6 +33,12 @@ carrying that fact — a lane told what it was missing can usually solve what it
 does not close an information gap; the same brief at a higher rung would only buy a more elaborate
 wrong answer, which is the deeper reason there is no higher rung. If the missing fact is one you do
 not have either, that is Escalation at the end.
+
+Debugging has no lane. When an error, a failing test or unexpected behaviour surfaces,
+`opulent:test-runner` reproduces it and diagnoses the likely root cause; you decide; `opulent:coder`
+implements the minimal fix with the diagnosis in its brief — the exact error text, the reproduction,
+the hypothesis, and how the fix will be verified. Fix the cause, not the symptom, and say in the
+brief which is which.
 
 Documentation is YOURS and is not delegated. You made the design decisions, so you are the only
 one who can say why they went this way rather than the other — a lane briefed on the outcome writes
