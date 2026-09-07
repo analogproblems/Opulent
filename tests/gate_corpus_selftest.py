@@ -116,8 +116,10 @@ def synthetic_gate():
 
 SYNTHETIC_GATE = synthetic_gate()
 
+# No background gc/maintenance: it detaches after a commit and can leave a transient lock under .git/objects while a fixture is being copied (seen on macOS CI).
 GIT_CONF = ["-c", "user.name=t", "-c", "user.email=t@t",
-            "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"]
+            "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main",
+            "-c", "gc.auto=0", "-c", "gc.autoDetach=false", "-c", "maintenance.auto=false"]
 
 
 def git(repo, *args, check=True):
@@ -321,7 +323,8 @@ def main():
     # drift exceeds its own length — hence one per character plus slack, not a
     # token few. A fixture with four of these leaked "zebr" and looked clean.
     holder = os.path.join(ROOT, "İ" * (len(SECRET) + 2) + SECRET + "-work")
-    shutil.copytree(repo, holder)
+    # Belt for the same race: a lock file is never part of the corpus.
+    shutil.copytree(repo, holder, ignore=shutil.ignore_patterns("*.lock"))
     code, out = run_gate(holder, SECRET)
     leaked = SECRET.lower() in out.lower()
     print(f"{'FAIL' if leaked else 'PASS'}  a term after a length-changing "

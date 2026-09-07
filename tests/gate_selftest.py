@@ -76,10 +76,12 @@ MASK = "[private]"
 # Committer identity and defaults are passed per invocation rather than
 # written into the fixture: a CI runner has no global git config, and a fixture
 # that borrowed the developer's would be a fixture that builds on one machine.
+# No background gc/maintenance: it detaches after a commit and can leave a transient lock under .git/objects while a fixture is being copied (seen on macOS CI).
 GIT_CONF = ["-c", "user.name=gate selftest",
             "-c", "user.email=gate@example.invalid",
             "-c", "init.defaultBranch=main",
-            "-c", "commit.gpgsign=false"]
+            "-c", "commit.gpgsign=false",
+            "-c", "gc.auto=0", "-c", "gc.autoDetach=false", "-c", "maintenance.auto=false"]
 
 
 def git(repo, *args):
