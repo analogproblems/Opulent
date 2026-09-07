@@ -58,6 +58,20 @@ import shlex
 import sys
 import tempfile
 
+# The pr-lane ledger recorder, imported by path rather than by luck. A hook
+# run as a script gets its own directory on sys.path for free; ci_checks.py
+# execs this file's source in a namespace of its own making, and an import
+# that worked only one of those two ways is an import CI cannot see. Failure
+# to import is not an error here — pr_lane is None and every call site skips,
+# which is the same outcome a project with no `.claude/pr-lane.json` gets.
+_HERE = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+try:
+    import pr_lane
+except Exception:
+    pr_lane = None
+
 HOME = os.path.expanduser("~")
 LOG_PATH = os.environ.get("OPULENT_LOG") or os.path.join(HOME, ".claude", "opulent-log.jsonl")
 # `~` and relative spellings are honored and anchored to HOME, not to the
@@ -257,7 +271,15 @@ _SETTINGS_RE = re.compile(r"^settings(\.[\w-]+)*\.json$")
 # `.claude/launch.json` with it, which Claude writes itself in ordinary
 # preview use. A guard that fights the harness over the harness's own file
 # costs far more than the accident it prevents.
-_CONTROL_BASENAMES = {"hookkit.json"}
+#
+# `pr-lane.json` is this plugin's own, and it earns the same judgment for the
+# same reason: it names the base branch, the commands a lane is told to run
+# and the identity it commits under, so a session that could rewrite it could
+# rewrite the instructions every implementation brief is built from. Note what
+# is NOT here — `.claude/pr-lane/ledger.jsonl`. The ledger is a record the
+# main loop is expected to append to, and hooks/pr_lane.py says why that
+# asymmetry is the design rather than an oversight.
+_CONTROL_BASENAMES = {"hookkit.json", "pr-lane.json"}
 # .env templates are committed documentation of shape, not secrets. `.envrc`
 # is NOT exempt: direnv executes it as shell.
 _ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
@@ -1326,6 +1348,16 @@ def main():
     # the module's blanket fail-open swallowed it — allowing the call with NO
     # log line, and taking the whole Bash and PowerShell branch with it.
     cwd = str(payload.get("cwd") or os.getcwd())
+
+    # The pr-lane ledger: a different file, a different vocabulary, and the
+    # only thing in this hook that is opt-in. It is placed here, above every
+    # branch, because each of those branches ends in an allow() that exits —
+    # a recorder further down would be skipped by whichever branch ran first.
+    # Costs one isfile() in a project that never opted in, records nothing
+    # there, and cannot raise: see hooks/pr_lane.py. It never writes a routing
+    # log line, and no routing log line is ever written to the ledger.
+    if recording and pr_lane is not None:
+        pr_lane.record(payload, tool, tin, cwd)
 
     if tool in ("Task", "Agent"):
         st = tin.get("subagent_type") or ""

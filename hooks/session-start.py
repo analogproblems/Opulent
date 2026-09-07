@@ -5,6 +5,19 @@ Also surfaces recent routing telemetry so enforcement is visible, not
 invisible — invisible enforcement is unloved enforcement."""
 import json
 import os
+import sys
+
+# The pr-lane policy block, imported by path rather than by luck — see the
+# same note in route-models.py. An import that fails leaves pr_lane None and
+# this hook emits exactly what 0.24.0 emitted, which is also what a project
+# with no `.claude/pr-lane.json` gets.
+_HERE = os.path.dirname(os.path.abspath(globals().get("__file__") or sys.argv[0]))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+try:
+    import pr_lane
+except Exception:
+    pr_lane = None
 
 # One string, spliced from nothing. Until 0.15.0 the implementation lane and
 # the ladder paragraph were separate constants that eco and Codex mode swapped
@@ -171,18 +184,37 @@ def _recent_activity():
             % (len(events), ", ".join("%d %s" % (n, name) for name, n in counts), path))
 
 
+def _pr_lane():
+    """The pr-lane policy block, or the empty string — and the empty string is
+    the load-bearing half.
+
+    Deliberately NOT spliced into CONTEXT. CONTEXT is the routing policy, byte
+    for byte what 0.24.0 shipped, and ci_checks.py asserts that a session in a
+    project with no `.claude/pr-lane.json` gets exactly those bytes and no
+    others. A block appended inside the constant could not make that assertion
+    trivially true; a separate function that returns "" can, and the whole
+    opt-in rests on it. Guarded like the telemetry read for the same reason:
+    an add-on must never cost the session its policy."""
+    try:
+        return pr_lane.policy_block(pr_lane.project_dir()) if pr_lane else ""
+    except Exception:
+        return ""
+
+
 def _context():
-    """Policy first, telemetry second — and never the other way around.
+    """Policy first, telemetry second, the opt-in block last — and never the
+    other way around.
 
     The activity line is an add-on; the policy is the reason this hook exists.
     Computing them in one expression meant anything thrown while reading the
     log took the policy down with it, silently, leaving the session with no
     routing guidance while the PreToolUse hook kept enforcing against it."""
     try:
-        return CONTEXT + _recent_activity()
+        text = CONTEXT + _recent_activity()
     except Exception:
         # Only the telemetry read can land here, and the policy survives it.
-        return CONTEXT
+        text = CONTEXT
+    return text + _pr_lane()
 
 
 print(json.dumps({"hookSpecificOutput": {

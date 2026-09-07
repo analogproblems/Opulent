@@ -98,6 +98,12 @@ def run(payload, env_extra=None, field="permissionDecision"):
     # state. The retirement itself is asserted in the rows below.
     for _retired in ("OPULENT_OFF", "OPULENT_ECO", "OPULENT_CODEX"):
         env.pop(_retired, None)
+    # And CLAUDE_PROJECT_DIR, which is not retired but inherited: since 0.25.0
+    # the hook looks for `<project>/.claude/pr-lane.json` there, so a suite run
+    # from inside a project that HAS opted in would append this suite's
+    # fixtures to that project's real ledger. The pr-lane rows below set it
+    # explicitly, to a throwaway directory.
+    env.pop("CLAUDE_PROJECT_DIR", None)
     if env_extra:
         env.update(env_extra)
     try:
@@ -226,6 +232,10 @@ PLUGIN_DATA = os.path.join(HOME, ".claude", "plugins", "data", "hookkit", "state
 # A sibling plugin's hook config, sitting directly under .claude the way
 # settings.json does and deciding as surely as it does whether a gate runs.
 HOOKKIT = os.path.join(HOME, ".claude", "hookkit.json")
+# The pr-lane pair, and the asymmetry is the point: the config is control
+# plane, the ledger beside it is a record the main loop appends to.
+PRLANE_CONFIG = os.path.join(HOME, ".claude", "pr-lane.json")
+PRLANE_LEDGER = os.path.join(HOME, ".claude", "pr-lane", "ledger.jsonl")
 
 # Windows path spellings, written as literals rather than built with
 # os.path.join, because the point of each is the SPELLING and not the platform
@@ -461,6 +471,22 @@ CASES = [
     ("main Write user hookkit.json", edit("Write", HOOKKIT),                            "deny"),
     ("main Write project hookkit",   edit("Write", os.path.join(".claude", "hookkit.json"), cwd=CWD), "deny"),
     ("main Bash redirect hookkit",   bash("echo {} > .claude/hookkit.json", cwd=CWD),   "deny"),
+    # --- and so does this plugin's own pr-lane config: it names the base
+    # branch, the commands a lane is told to run and the identity it commits
+    # under, so rewriting it rewrites every brief built from it.
+    ("main Write user pr-lane.json", edit("Write", PRLANE_CONFIG),                      "deny"),
+    ("main Write project pr-lane.json", edit("Write", os.path.join(".claude", "pr-lane.json"), cwd=CWD), "deny"),
+    ("main Bash redirect pr-lane.json", bash("echo {} > .claude/pr-lane.json", cwd=CWD), "deny"),
+    ("main PowerShell literal-built pr-lane.json",
+     powershell('Set-Content -Path (Join-Path $HOME ".claude" "pr-lane.json") -Value x', cwd=CWD), "deny"),
+    # ... and the non-deny twin, which is the whole shape of the design: the
+    # LEDGER is a record the main loop is expected to append to. `pr-lane.json`
+    # is configuration and `pr-lane/` is not, and one character between them
+    # decides it — so both spellings are pinned here rather than one.
+    ("main Write pr-lane ledger",    edit("Write", PRLANE_LEDGER),                      "allow"),
+    ("main Bash append pr-lane ledger", bash("echo {} >> " + q(PRLANE_LEDGER)),         "allow"),
+    ("main Write project pr-lane ledger", edit("Write", os.path.join(".claude", "pr-lane", "ledger.jsonl"), cwd=CWD), "allow"),
+    ("main Write inside pr-lane dir", edit("Write", os.path.join(HOME, ".claude", "pr-lane", "notes.md")), "allow"),
     # ... and that set stays ENUMERATED. Claude writes .claude/launch.json
     # itself in ordinary preview use, so the tempting generalization — every
     # *.json beside settings.json — would have the hook fighting the harness
@@ -986,6 +1012,14 @@ TELEMETRY = [
      post(bash("echo {} > " + q(PLUGIN_DATA), cwd=CWD)), "allow", ["edit"], PLUGIN_DATA),
     ("an rm under plugins/data is recorded as a remove",
      post(bash("rm " + q(PLUGIN_DATA), cwd=CWD)), "allow", ["remove"], PLUGIN_DATA),
+    # --- the pr-lane ledger is state too, and it is recorded in the ROUTING
+    # log's own vocabulary: `edit`, not a sixth event name. The two files stay
+    # separate, and neither borrows the other's words.
+    ("a write to the pr-lane ledger is recorded as an edit",
+     post(edit("Write", PRLANE_LEDGER)), "allow", ["edit"], PRLANE_LEDGER),
+    ("a bash append to the pr-lane ledger is recorded as an edit",
+     post(bash("echo {} >> " + q(PRLANE_LEDGER), cwd=CWD)), "allow", ["edit"],
+     PRLANE_LEDGER),
     # --- the record's staples ---
     ("main edit logs exactly one edit",
      post(edit("Edit", os.path.join(CWD, "src", "app.py"), cwd=CWD)),
@@ -1631,6 +1665,200 @@ else:
     for _desc, _ in _DOT_CASES:
         print(f"SKIP  {_desc}: on {sys.platform} a trailing dot names a "
               f"different directory, and allowing it is the correct answer")
+
+# --- the pr-lane ledger (0.25.0) -------------------------------------------
+#
+# A different file with a different vocabulary, written at PostToolUse like
+# everything else the hook records. Every row runs in a throwaway project
+# directory carrying its own `.claude/pr-lane.json`, because that file is what
+# switches the whole feature on: the last rows here are the same payloads with
+# no config and with a broken one, and they must record NOTHING. An opt-in
+# that records anything before you opt in is not one.
+PRLANE_CFG_TEXT = json.dumps({"schema": "pr-lane/1", "base": "main",
+                              "review": {"provider": "opulent:reviewer"}})
+CONTRACT_MARKER = "PR-LANE CONTRACT v1"
+BRIEF = (
+    "Implement the unit below.\n\n" + CONTRACT_MARKER + "\n"
+    "- unit: w4-a   hazard: none   branch: feat/w4-a off origin/main\n"
+    "- Work only in the isolated worktree you were given.\n")
+# The same brief with the marker filed off: an ordinary delegation, which is
+# most of them, and which the ledger has no business recording.
+UNMARKED_BRIEF = BRIEF.replace(CONTRACT_MARKER, "Implementation notes")
+CODER_REPORT = ("Done. branch feat/w4-a, head SHA 1a2b3c4.\n"
+                "Files changed: src/thing.rs — the guard.\n"
+                "Red-then-green: assertion failed at thing.rs:42.\n")
+REVIEW_PROMPT = "Review the diff.\n- unit: w4-b   hazard: none\n"
+
+
+def prlane_project(config=PRLANE_CFG_TEXT):
+    root = tempfile.mkdtemp(prefix="opulent-prlane-")
+    atexit.register(shutil.rmtree, root, True)
+    if config is not None:
+        os.makedirs(os.path.join(root, ".claude"))
+        with open(os.path.join(root, ".claude", "pr-lane.json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(config)
+    return root
+
+
+def prlane(payload, config=PRLANE_CFG_TEXT):
+    """One payload against a throwaway pr-lane project: (decision, records).
+
+    CLAUDE_PROJECT_DIR and the payload cwd both point at the fixture, so this
+    says nothing about whichever project the suite happens to be run from."""
+    root = prlane_project(config)
+    body = dict(payload)
+    body["cwd"] = root
+    got = run(body, {"CLAUDE_PROJECT_DIR": root})
+    try:
+        with open(os.path.join(root, ".claude", "pr-lane", "ledger.jsonl"),
+                  encoding="utf-8") as fh:
+            records = [json.loads(line) for line in fh if line.strip()]
+    except OSError:
+        records = []               # no ledger at all is the same as no records
+    return got, records
+
+
+def agent_return(lane, prompt, text, event="PostToolUse", agent=None, sid=None):
+    """A Task/Agent call on the half that RECORDS, carrying the lane's report.
+
+    Two field names are load-bearing and neither was exercised by this suite
+    before 0.25.0: `tool_input.prompt` is where the contract marker rides in,
+    and `tool_response` is where the lane's report comes back. The nested
+    content-block shape is the one the harness sends for an agent; pr_lane.py
+    walks whatever arrives rather than pinning one shape, and the `gh` rows
+    below send the flat `stdout` shape to keep both readings honest."""
+    body = {"tool_name": "Agent", "hook_event_name": event,
+            "tool_input": {"subagent_type": lane, "prompt": prompt},
+            "tool_response": {"content": [{"type": "text", "text": text}]}}
+    if agent:
+        body["agent_id"] = agent
+    if sid:
+        body["session_id"] = sid
+    return body
+
+
+def shell_return(cmd, out, tool="Bash"):
+    return {"tool_name": tool, "hook_event_name": "PostToolUse",
+            "tool_input": {"command": cmd},
+            "tool_response": {"stdout": out, "stderr": "",
+                              "interrupted": False}}
+
+
+PR_URL = "https://github.com/example/repo/pull/74"
+PR_LANE_LEDGER = [
+    # --- the two agent returns the hook reads ---
+    ("a coder return carrying the contract marker records one coded",
+     agent_return("opulent:coder", BRIEF, CODER_REPORT), PRLANE_CFG_TEXT,
+     [{"event": "coded", "unit": "w4-a", "by": "hook",
+       "branch": "feat/w4-a", "sha": "1a2b3c4"}]),
+    ("a mechanic return carrying the marker records one coded",
+     agent_return("opulent:mechanic", BRIEF, CODER_REPORT), PRLANE_CFG_TEXT,
+     [{"event": "coded", "unit": "w4-a", "by": "hook"}]),
+    # The twin, and the one that matters most: the marker is the ONLY thing
+    # separating a pr-lane unit from every other delegation, and a ledger that
+    # recorded ordinary work would be a ledger nobody could read.
+    ("a coder return with no marker records nothing",
+     agent_return("opulent:coder", UNMARKED_BRIEF, CODER_REPORT),
+     PRLANE_CFG_TEXT, []),
+    ("a reviewer return ending SAFE records reviewed/SAFE",
+     agent_return("opulent:reviewer", REVIEW_PROMPT,
+                  "Two suggestions, no criticals.\nSAFE to merge"),
+     PRLANE_CFG_TEXT,
+     [{"event": "reviewed", "unit": "w4-b", "verdict": "SAFE"}]),
+    # SAFE is a substring of NOT SAFE, so a naive check turns every rejection
+    # into an approval — the one misreading in this file that could get bad
+    # code merged.
+    ("a reviewer return ending NOT SAFE records reviewed/NOT SAFE",
+     agent_return("opulent:reviewer", REVIEW_PROMPT,
+                  "One critical.\nNOT SAFE — 1 Critical"),
+     PRLANE_CFG_TEXT,
+     [{"event": "reviewed", "unit": "w4-b", "verdict": "NOT SAFE"}]),
+    ("a reviewer return with no verdict line records unknown",
+     agent_return("opulent:reviewer", REVIEW_PROMPT, "I had a look around."),
+     PRLANE_CFG_TEXT, [{"event": "reviewed", "verdict": "unknown"}]),
+    # --- the gh commands ---
+    ("gh pr create records pr_opened with the number from the URL",
+     shell_return('gh pr create --head feat/w4-a --title "the unit" '
+                  '--body-file body.md', PR_URL + "\n"),
+     PRLANE_CFG_TEXT,
+     [{"event": "pr_opened", "unit": "w4-a", "pr": 74,
+       "branch": "feat/w4-a"}]),
+    ("gh pr create through PowerShell records pr_opened too",
+     shell_return("gh pr create --head feat/w4-a --fill", PR_URL + "\n",
+                  tool="PowerShell"),
+     PRLANE_CFG_TEXT, [{"event": "pr_opened", "unit": "w4-a", "pr": 74}]),
+    # Quoted spans are blanked before the match, exactly as the routing log's
+    # own test recogniser does it: a command that MENTIONS gh opens no PR.
+    ("a quoted gh pr create records nothing",
+     shell_return('echo "gh pr create --head feat/w4-a"',
+                  "gh pr create --head feat/w4-a\n"), PRLANE_CFG_TEXT, []),
+    ("a settled gh pr checks records ci/pass",
+     shell_return("gh pr checks 74",
+                  "CI\tpass\t1m\nselftests (ubuntu-latest)\tpass\t2m\n"),
+     PRLANE_CFG_TEXT, [{"event": "ci", "pr": 74, "verdict": "pass"}]),
+    ("a failing gh pr checks records ci/fail",
+     shell_return("gh pr checks 74",
+                  "CI\tpass\t1m\nselftests (windows-latest)\tfail\t2m\n"),
+     PRLANE_CFG_TEXT, [{"event": "ci", "pr": 74, "verdict": "fail"}]),
+    # A run still in flight is not a result. Recording it as one would put a
+    # verdict in the ledger that the ledger's whole value says was observed.
+    ("a gh pr checks still running records nothing",
+     shell_return("gh pr checks 74",
+                  "CI\tpending\t0s\nselftests (macos-latest)\tpass\t2m\n"),
+     PRLANE_CFG_TEXT, []),
+    ("gh pr merge records merged",
+     shell_return("gh pr merge 74 --squash --delete-branch", ""),
+     PRLANE_CFG_TEXT, [{"event": "merged", "pr": 74}]),
+    ("an ordinary command in a pr-lane project records nothing",
+     shell_return("cargo test", "test result: ok. 12 passed\n"),
+     PRLANE_CFG_TEXT, []),
+    # --- the opt-in itself, from three directions ---
+    ("the same coder return records nothing with no config",
+     agent_return("opulent:coder", BRIEF, CODER_REPORT), None, []),
+    ("the same coder return records nothing on a malformed config",
+     agent_return("opulent:coder", BRIEF, CODER_REPORT), "{ not json", []),
+    ("a schema from the future records nothing",
+     agent_return("opulent:coder", BRIEF, CODER_REPORT),
+     '{"schema": "pr-lane/99"}', []),
+    # PreToolUse decides and records nothing — the ledger obeys the same split
+    # as the routing log, and for the same reason: another plugin's hook is
+    # still free to deny this call.
+    ("a coder return at PreToolUse records nothing",
+     agent_return("opulent:coder", BRIEF, CODER_REPORT, event="PreToolUse"),
+     PRLANE_CFG_TEXT, []),
+    # Subagent calls are exempt from the record, here as everywhere: the
+    # ledger covers the main loop, which is the only place units are run from.
+    ("a coder return inside a subagent records nothing",
+     agent_return("opulent:coder", BRIEF, CODER_REPORT, agent="a1"),
+     PRLANE_CFG_TEXT, []),
+    ("a ledger record carries the payload's session id",
+     agent_return("opulent:coder", BRIEF, CODER_REPORT, sid="session-1234-abcd"),
+     PRLANE_CFG_TEXT, [{"event": "coded", "sid": "session-"}]),
+]
+
+for _desc, _payload, _config, _want in PR_LANE_LEDGER:
+    _got, _records = prlane(_payload, _config)
+    _ok = _got == "allow" and len(_records) == len(_want)
+    if _ok:
+        for _rec, _exp in zip(_records, _want):
+            for _k, _v in _exp.items():
+                if _rec.get(_k) != _v:
+                    _ok = False
+            if "t" not in _rec:
+                _ok = False        # every record is timestamped, like the log
+    extra(_desc, _ok, f"allow/{_want}", f"{_got}/{_records or 'nothing'}")
+
+# The ledger is not the routing log and never borrows its file: a recorded
+# unit must leave the routing log exactly as it found it. Asserted with a real
+# log file rather than the null device, because "no lines" is the claim.
+_root = prlane_project()
+_body = dict(agent_return("opulent:coder", BRIEF, CODER_REPORT))
+_body["cwd"] = _root
+_decision, _routing = logged(_body, {"CLAUDE_PROJECT_DIR": _root})
+extra("a recorded pr-lane unit writes one delegate line and no more",
+      _decision == "allow" and [e.get("event") for e in _routing] == ["delegate"],
+      "allow/['delegate']", f"{_decision}/{[e.get('event') for e in _routing]}")
 
 total = (len(CASES) + len(TELEMETRY) + len(REASONS) + len(LOG_GUARD_CASES)
          + extra_checks)

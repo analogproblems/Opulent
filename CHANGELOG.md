@@ -10,6 +10,10 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.25.0 — 2026-09-07
+
+_(entry pending — architect)_
+
 ## opulent 0.24.0 — 2026-09-07
 
 **The hooks run, and are tested, on every platform Claude Code runs on.** CI

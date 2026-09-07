@@ -6,9 +6,12 @@ list is derived from marketplace.json, so a plugin added to the marketplace is
 checked here with no edit to this file. Runs identically under PowerShell,
 cmd, or bash — no pipes or heredocs required."""
 import contextlib
+import datetime
 import io
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -141,7 +144,11 @@ def hook_namespace(relpath, stdin=""):
     path = os.path.join(REPO, relpath)
     with open(path, encoding="utf-8") as fh:
         source = fh.read()
-    ns = {"__name__": "_hook_under_test"}
+    # __file__ is set because a module executed from a file has one, and since
+    # 0.25.0 the hooks use it to find their sibling pr_lane.py. Without it the
+    # exec'd copy would silently take the "no pr-lane module" branch and every
+    # check below would pass for a reason that is not the code's.
+    ns = {"__name__": "_hook_under_test", "__file__": path}
     real_stdin = sys.stdin
     sys.stdin = io.StringIO(stdin)
     try:
@@ -375,6 +382,251 @@ if "No routing activity recorded yet" not in quiet_ctx or empty_log not in quiet
         "session-start: a session with an empty log must still say so and "
         "name the log path")
 print("session-start names the log path even before any activity")
+
+# --- pr-lane (0.25.0), opt-in and inert until opted into --------------------
+#
+# The property everything else rests on: in a project with no
+# `.claude/pr-lane.json`, this hook emits what 0.24.0 emitted, byte for byte.
+# Asserted against the real 0.24.0 file rather than against a description of
+# it — the baseline is read out of the object database and RUN, so a policy
+# edit that happens to keep the line count cannot pass for "unchanged".
+PR_LANE_BASELINE = "13316c0"     # the last commit before pr-lane existed
+pr_ns = hook_namespace(os.path.join("hooks", "pr_lane.py"))
+MARKER = constant(pr_ns, "MARKER", "hooks/pr_lane.py")
+
+
+def session_context(cwd, hook_path=None):
+    """additionalContext from one run of the session-start hook, in `cwd`.
+
+    OPULENT_LOG is pointed at the null device and CLAUDE_PROJECT_DIR is
+    cleared, so two runs a second apart are comparable: with a real log the
+    activity line moves under the check, and with an inherited project dir the
+    result would depend on whose machine CI is standing in for."""
+    env = dict(os.environ, OPULENT_LOG=os.devnull)
+    env.pop("CLAUDE_PROJECT_DIR", None)
+    out = subprocess.run([sys.executable, hook_path or hook], capture_output=True,
+                         text=True, timeout=30, cwd=cwd, env=env)
+    if out.returncode != 0:
+        print(out.stderr, file=sys.stderr)
+        raise SystemExit(f"session-start.py exited {out.returncode} in {cwd}")
+    return json.loads(out.stdout)["hookSpecificOutput"]["additionalContext"]
+
+
+def pr_lane_project(config=None):
+    """A throwaway project directory, with `.claude/pr-lane.json` in it when
+    `config` is given."""
+    root = tempfile.mkdtemp(prefix="opulent-prlane-")
+    if config is not None:
+        os.makedirs(os.path.join(root, ".claude"))
+        with open(os.path.join(root, ".claude", "pr-lane.json"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(config)
+    return root
+
+
+VALID_CONFIG = json.dumps({
+    "schema": "pr-lane/1",
+    "base": "main",
+    "commands": {"step_zero": "scripts/build.sh", "check": "cargo check",
+                 "test": "cargo test", "lint": "cargo clippy -- -D warnings"},
+    "shared_machine": {"lock_dir": "${SCRATCHPAD}/build-lock",
+                       "target_dir": "/src/target", "max_lanes_building": 2},
+    "git": {"trailer": "Co-Authored-By: Someone <someone@example.com>",
+            "user": "Someone", "email": "someone@example.com",
+            "never_commit": [".claude/agent-memory/**"]},
+    "pr": {"footer": "Generated with Claude Code", "merge": "architect",
+           "method": "squash"},
+    "review": {"provider": "opulent:reviewer"},
+    "hazards": ["concurrency", "auth", "crypto", "migration", "money",
+                "public-contract"],
+}, indent=2)
+
+_none_project = pr_lane_project()
+_cfg_project = pr_lane_project(VALID_CONFIG)
+_bad_project = pr_lane_project("{ this is not json")
+try:
+    plain = session_context(_none_project)
+    baseline = subprocess.run(
+        ["git", "show", f"{PR_LANE_BASELINE}:hooks/session-start.py"],
+        capture_output=True, cwd=REPO)
+    if baseline.returncode == 0 and baseline.stdout:
+        with tempfile.NamedTemporaryFile("wb", suffix=".py", delete=False) as fh:
+            fh.write(baseline.stdout)
+            baseline_hook = fh.name
+        try:
+            was = session_context(_none_project, baseline_hook)
+        finally:
+            os.unlink(baseline_hook)
+        if plain != was:
+            raise SystemExit(
+                "session-start: with no .claude/pr-lane.json the output is no "
+                f"longer {PR_LANE_BASELINE}'s (0.24.0) — the opt-in is not "
+                "opt-in. First difference at character "
+                f"{next((i for i, (a, b) in enumerate(zip(plain, was)) if a != b), min(len(plain), len(was)))}")
+        print(f"session-start with no pr-lane config is byte-identical to "
+              f"{PR_LANE_BASELINE} (0.24.0)")
+    else:
+        # A shallow clone has no such object. CI checks out with fetch-depth 0
+        # for the public gate, so this is the contributor's local case, and the
+        # structural check below still runs — it is never nothing.
+        print(f"SKIP  0.24.0 baseline comparison: {PR_LANE_BASELINE} is not in "
+              f"this checkout's object database")
+    # True whatever git can reach: the block contributes ZERO bytes, so the
+    # policy text ends where the telemetry line does and the marker is nowhere
+    # in it.
+    if MARKER in plain or "pr-lane" in plain:
+        raise SystemExit(
+            "session-start: a project with no .claude/pr-lane.json is being "
+            "told about pr-lane — the module must be silent until opted into")
+
+    # With the config, the block is APPENDED: the 0.24.0 text is still a
+    # prefix, and everything new is inside a bounded budget.
+    withcfg = session_context(_cfg_project)
+    if not withcfg.startswith(plain):
+        raise SystemExit(
+            "session-start: the pr-lane block did not APPEND — the routing "
+            "policy is no longer a prefix of the output, so opting in changed "
+            "what a session is told about routing")
+    block = withcfg[len(plain):]
+    lines = block.strip("\n").split("\n")
+    if len(lines) > 40:
+        raise SystemExit(
+            f"session-start: the pr-lane block is {len(lines)} lines, over the "
+            f"40-line budget — it shares a context window with the routing "
+            f"policy, and there is no rung above 'the model stopped reading'")
+    if MARKER not in block:
+        raise SystemExit(
+            f"session-start: the pr-lane block never carries {MARKER!r} — the "
+            f"contract is the one thing a brief has to be able to paste")
+    for needle in ("cargo test", "origin/main", "opulent:reviewer",
+                   ".claude/agent-memory/**"):
+        if needle not in block:
+            raise SystemExit(
+                f"session-start: the pr-lane block never says {needle!r} — the "
+                f"contract's fields come from the config, and a field that "
+                f"does not arrive is a lane briefed on this repo's defaults")
+    if "${SCRATCHPAD}" in block:
+        raise SystemExit(
+            "session-start: ${SCRATCHPAD} reached the brief unexpanded — the "
+            "lane would take a lock in a directory literally named that")
+    print(f"session-start appends the pr-lane block ({len(lines)} lines) when "
+          f"the config is present")
+
+    # An invalid config costs the session exactly ONE line, and never the
+    # policy. This is the fail-open case: a typo in a JSON file must not be
+    # able to turn the routing policy off.
+    broken = session_context(_bad_project)
+    if not broken.startswith(plain):
+        raise SystemExit(
+            "session-start: an unparseable pr-lane config changed the routing "
+            "policy — the one thing a malformed config must never do")
+    extra_lines = [l for l in broken[len(plain):].strip("\n").split("\n") if l]
+    if len(extra_lines) != 1 or "pr-lane" not in extra_lines[0]:
+        raise SystemExit(
+            f"session-start: an unparseable pr-lane config added "
+            f"{len(extra_lines)} lines, expected exactly one naming the parse "
+            f"error: {extra_lines!r}")
+    print("session-start reports an unparseable pr-lane config in one line")
+finally:
+    for _root in (_none_project, _cfg_project, _bad_project):
+        shutil.rmtree(_root, True)
+
+# The loader never raises, whatever is in the file — the property the whole
+# fail-open rests on, asserted directly rather than through the hook, because
+# the hook's own blanket except would hide a raise here as an allow.
+_load = constant(pr_ns, "load", "hooks/pr_lane.py")
+_defaults = constant(pr_ns, "DEFAULTS", "hooks/pr_lane.py")
+for _junk, _why in (("{ not json", "malformed JSON"),
+                    ("[1, 2, 3]", "a list at the top level"),
+                    ('{"base": "main"}', "no schema key"),
+                    ('{"schema": "pr-lane/99"}', "a schema from the future"),
+                    ('{"schema": "pr-lane/1", "pr": 7}', "a section of the wrong type")):
+    _root = pr_lane_project(_junk)
+    try:
+        cfg = _load(_root)
+    except Exception as exc:      # the bare catch IS the assertion here
+        raise SystemExit(f"hooks/pr_lane.py: load() raised on {_why}: {exc!r}")
+    finally:
+        shutil.rmtree(_root, True)
+    if cfg.data.get("base") != _defaults["base"]:
+        raise SystemExit(
+            f"hooks/pr_lane.py: load() lost its defaults on {_why} — a config "
+            f"it cannot believe must degrade to the defaults, not to nothing")
+    if not (cfg.error or cfg.warnings):
+        raise SystemExit(
+            f"hooks/pr_lane.py: load() accepted {_why} in silence — an ignored "
+            f"file the user believes is in force is worse than no file")
+print("hooks/pr_lane.py: the config loader degrades to defaults and never raises")
+
+# The renderer, over a fixture ledger. Both forms are pinned: the one line
+# session start shows, and the full report /opulent:pr-lane prints.
+_summary = constant(pr_ns, "summary", "hooks/pr_lane.py")
+_report = constant(pr_ns, "report", "hooks/pr_lane.py")
+NOW = datetime.datetime(2026, 9, 7, 12, 0, tzinfo=datetime.timezone.utc)
+
+
+def at(days):
+    return (NOW - datetime.timedelta(days=days)).isoformat(timespec="seconds")
+
+
+LEDGER_FIXTURE = [
+    {"t": at(3), "unit": "w4-a", "event": "unit_defined", "by": "model"},
+    {"t": at(2), "unit": "w4-a", "event": "coded", "by": "hook",
+     "branch": "feat/w4-a", "sha": "abc1234"},
+    {"t": at(2), "unit": "w4-b", "event": "coded", "by": "hook"},
+    {"t": at(1), "unit": "w4-b", "event": "reviewed", "by": "hook",
+     "verdict": "NOT SAFE"},
+    {"t": at(1), "unit": "w4-c", "event": "pr_opened", "by": "hook", "pr": 74},
+    {"t": at(1), "unit": "w4-d", "event": "merged", "by": "hook", "pr": 73},
+    # Merged nine days ago: on disk, out of the summary. The count has to drop
+    # with it, or the line names three units and counts four.
+    {"t": at(9), "unit": "w4-old", "event": "merged", "by": "hook", "pr": 70},
+]
+WANT_SUMMARY = ("pr-lane: 4 units — coded w4-a · reviewed w4-b · "
+                "open PRs #74 · merged #73 (last 7 days)")
+got_summary = _summary(LEDGER_FIXTURE, now=NOW)
+if got_summary != WANT_SUMMARY:
+    raise SystemExit(f"hooks/pr_lane.py: the ledger summary rendered\n  "
+                     f"{got_summary!r}\nexpected\n  {WANT_SUMMARY!r}")
+if _summary([], now=NOW) != "pr-lane: ledger empty":
+    raise SystemExit("hooks/pr_lane.py: an empty ledger must render "
+                     "'pr-lane: ledger empty', not a zero-count line")
+_root = pr_lane_project(VALID_CONFIG)
+try:
+    os.makedirs(os.path.join(_root, ".claude", "pr-lane"))
+    with open(os.path.join(_root, ".claude", "pr-lane", "ledger.jsonl"), "w",
+              encoding="utf-8") as fh:
+        for rec in LEDGER_FIXTURE:
+            fh.write(json.dumps(rec) + "\n")
+        fh.write("{ torn line\n")       # a hand-edited line is not a record
+        fh.write("\n")
+    full = _report(_root, now=NOW)
+finally:
+    shutil.rmtree(_root, True)
+for needle in ("w4-a", "coded, no review recorded", "NOT SAFE",
+               "no CI verdict recorded", WANT_SUMMARY, "parsed"):
+    if needle not in full:
+        raise SystemExit(
+            f"hooks/pr_lane.py: the full report never says {needle!r} — "
+            f"/opulent:pr-lane exists to say which units are blocked and on "
+            f"what:\n{full}")
+print("hooks/pr_lane.py: the ledger renderer pins both forms over a fixture")
+
+# A command may not name a lane that does not exist: `/opulent:pr-lane` is a
+# surface like the policy and the doctor, and a lane named there but missing
+# from agents/ is a delegation the session cannot make.
+PR_LANE_CMD = "commands/pr-lane.md"
+with open(os.path.join(REPO, "commands", "pr-lane.md"), encoding="utf-8") as fh:
+    pr_lane_cmd = fh.read()
+if not pr_lane_cmd.startswith("---\ndescription:"):
+    raise SystemExit(f"{PR_LANE_CMD}: no description frontmatter — a command "
+                     f"without one is unlistable")
+for named in sorted(set(re.findall(r"`opulent:([\w.-]+)`", pr_lane_cmd))):
+    if named not in AGENTS:
+        raise SystemExit(
+            f"{PR_LANE_CMD}: names lane `opulent:{named}`, which is not "
+            f"registered in agents/ — the roster is {', '.join(sorted(AGENTS))}")
+print(f"{PR_LANE_CMD} names no lane outside the roster")
 
 # The hook CONFIG, pinned — because nothing else in this repo goes through it.
 # hook_selftest.py runs route-models.py directly, so hooks.json can lose an
