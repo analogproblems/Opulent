@@ -776,27 +776,27 @@ CASES = [
      powershell('Set-Content notes.md -Value "see .claude and hooks in the docs"',
                 cwd=CWD),                                                               "deny"),
     # --- KNOWN GAPS, pinned at what the code actually does ---
-    # Both were reported as PowerShell-vs-Bash asymmetries; both survive the
-    # fixes above, for reasons that do not live in the PowerShell branch.
+    # Reported as a PowerShell-vs-Bash asymmetry; survives the fixes above,
+    # for reasons that do not live in the PowerShell branch.
     #
-    # 1. is_control_plane judges what sits UNDER a .claude directory, so a
-    #    path ENDING at .claude is not the control plane on EITHER shell —
-    #    `rm -rf ~/.claude` is allowed by the Bash branch too (measured, not
-    #    assumed). Closing it means changing is_control_plane, which moves
-    #    both shells at once and is not a PowerShell fix.
+    # is_control_plane judges what sits UNDER a .claude directory, so a
+    # path ENDING at .claude is not the control plane on EITHER shell —
+    # `rm -rf ~/.claude` is allowed by the Bash branch too (measured, not
+    # assumed). Closing it means changing is_control_plane, which moves
+    # both shells at once and is not a PowerShell fix.
     ("PowerShell Remove-Item of .claude itself is allowed, exactly as in Bash",
      powershell("Remove-Item .claude -Recurse -Force", cwd=FAKE_PROJ_CWD),              "allow"),
-    # 2. A bare `y.py` is path-ish under none of the rules, so a write whose
-    #    CWD is the control plane is judged on a text naming none of it. Bash
-    #    catches the mirror row above only because its parser knows `y.py` is
-    #    a redirect TARGET and resolves it against the payload's cwd. Closing
-    #    this needs a rule the co-occurrence one deliberately is not — roughly
-    #    `if writes and is_control_plane(cwd, cwd): deny(...)`, one line, and
-    #    the "Get-ChildItem in a control-plane cwd" row above would stay green
-    #    because it carries no write shape. It is a new rule either way, and
-    #    whose call that is does not belong to this suite.
-    ("PowerShell relative write in a control-plane cwd is NOT caught (gap)",
-     powershell("Set-Content y.py -Value x", cwd=FAKE_HOOKS_CWD),                       "allow"),
+    # --- PowerShell: a write-shaped command from a control-plane cwd ---
+    # A bare `y.py` is path-ish under none of the rules, so the per-token
+    # pass alone never resolves it. Bash catches the mirror row above only
+    # because its parser knows `y.py` is a redirect TARGET and resolves it
+    # against the payload's cwd; PowerShell has no parser, so a write shape
+    # from a control-plane cwd is judged on the cwd itself instead: denied
+    # outright, whatever its tokens spell. The "Get-ChildItem in a
+    # control-plane cwd" row above stays green because it carries no write
+    # shape.
+    ("PowerShell relative write in a control-plane cwd is denied",
+     powershell("Set-Content y.py -Value x", cwd=FAKE_HOOKS_CWD),                       "deny"),
     # --- delegation routing: unchanged, this was never the lockout ---
     ("main Task->Explore allowed",   task("Explore"),                                   "allow"),
     ("main Agent->Explore allowed",  {"tool_name": "Agent",

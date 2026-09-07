@@ -1396,6 +1396,14 @@ def main():
                 spelled = ('a path spelled out of the literals ".claude" and '
                            '"%s" in this write-shaped command' % lit)
                 deny(CONTROL_PLANE_DENIAL % spelled, "control:.claude+" + lit)
+            # The Bash branch denies `echo x > y.py` run from inside
+            # .claude/hooks because its parser knows y.py is a redirect
+            # target and resolves it against cwd; PowerShell has no parser,
+            # so a write shape from a control-plane cwd is the same fact
+            # stated the only way text can state it.
+            if writes and is_control_plane(cwd, cwd):
+                deny(CONTROL_PLANE_DENIAL % _resolve(cwd, cwd),
+                     "control:" + _resolve(cwd, cwd))
             allow()
         if writes:
             _log("unparsed", "powershell: " + cmd[:80])
