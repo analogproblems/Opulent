@@ -16,9 +16,30 @@ jobs:
   # The live end-to-end tier does need an authenticated claude CLI, so it is not
   # part of this repo's CI at all: a maintainer runs it by hand from a local
   # checkout before a release.
+  #
+  # Three OSes, because the hook's whole job is reading paths, and paths are
+  # where the platforms disagree: separators, drive letters, `nul`, the
+  # console's default encoding. The suite scored 239/328 the first time anyone
+  # ran it on Windows — 89 failures nobody could see from ubuntu-latest — so a
+  # single-OS matrix was not proving the thing this repo claims.
+  # fail-fast is off: one platform's failure must not hide another's.
   selftests:
-    name: Hook self-tests + public hygiene
-    runs-on: ubuntu-latest
+    name: Hook self-tests + public hygiene (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The interpreter's name, not a setup step. Windows runner images
+          # expose `python`; the Microsoft Store `python3` alias there is a
+          # stub that fails, which is exactly the fallback hooks.json is
+          # written for. Linux and macOS images expose `python3`.
+          - os: ubuntu-latest
+            py: python3
+          - os: windows-latest
+            py: python
+          - os: macos-latest
+            py: python3
     steps:
       - uses: actions/checkout@v5
         with:
@@ -40,21 +61,27 @@ jobs:
           # `pull_request_target`: a fork PR gets no secrets, so checking out
           # its head grants a contributor nothing the merge ref would not.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      # No setup-python: the runner image ships Python 3. Steps stay plain
+      # No setup-python: every runner image ships Python 3. Steps stay plain
       # invocations — no pipes, heredocs or shell-isms — so the suite runs the
-      # same way here as it does in a contributor's terminal.
+      # same way here as it does in a contributor's terminal, on the default
+      # shell of each OS (pwsh on Windows, bash elsewhere).
+      #
+      # Deliberately no PYTHONUTF8: the suites set encoding="utf-8" on every
+      # file they open and reconfigure their own stdout, and an environment
+      # variable papering over that would make Windows CI green while a
+      # contributor's cp1252 console still died on an em dash.
       - name: Show runner Python
-        run: python3 --version
+        run: ${{ matrix.py }} --version
       - name: Routing hook self-test
-        run: python3 tests/hook_selftest.py
+        run: ${{ matrix.py }} tests/hook_selftest.py
       - name: Marketplace members + session-start checks
-        run: python3 tests/ci_checks.py
+        run: ${{ matrix.py }} tests/ci_checks.py
       - name: Public-gate self-test
-        run: python3 tests/gate_selftest.py
+        run: ${{ matrix.py }} tests/gate_selftest.py
       - name: Public-gate corpus self-test
-        run: python3 tests/gate_corpus_selftest.py
+        run: ${{ matrix.py }} tests/gate_corpus_selftest.py
       - name: Public-hygiene gate
-        run: python3 tests/public_gate.py
+        run: ${{ matrix.py }} tests/public_gate.py
         env:
           # Identity terms cannot be stored in the gate — the term text is the
           # leak — so they arrive here. Absent on a fork's pull_request run,

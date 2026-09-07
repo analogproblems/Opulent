@@ -16,9 +16,10 @@ By routing the bulk data to the right tool for the job, Opulent preserves your e
 
 ## 📋 Requirements
 
-* **Python 3** on your `PATH` (as `python3` or `python`). 
-  * *Note:* Preinstalled on macOS and most Linux distros. On Windows, install from python.org — it ships `python.exe` only, no `python3` — then disable **both** App execution aliases (Settings → Apps → Advanced app settings → App execution aliases) and verify `python3 --version` and `python --version` in a terminal. A missing interpreter means silently **no enforcement**: fail-open can't cover an interpreter that never started.
+* **Python 3** on your `PATH`, reachable as **either** `python3` **or** `python` — the hooks try them in that order, so one of the two is enough. 
+  * *Note:* Preinstalled on macOS and most Linux distros. On Windows, install from python.org — it ships `python.exe` only, no `python3`. The Microsoft Store's `python3` alias is a **stub** that fails fast without running anything, and the hooks fall through to `python` when it does, so the alias is a nuisance rather than a breakage. (Disabling both App execution aliases — Settings → Apps → Advanced app settings → App execution aliases — still makes for a quieter terminal.) A *missing* interpreter is the real hazard: silently **no enforcement**, because fail-open cannot cover an interpreter that never started.
 * Everything else is stock Claude Code! No extra packages, no background daemons, and no network calls.
+* The hook self-tests run on **Linux, Windows and macOS** in CI, on every push and every pull request — the hook's whole job is reading paths, and paths are where the platforms disagree.
 
 ## 📦 Installation
 
@@ -128,6 +129,8 @@ Opulent uses built-in Claude Code hooks: `SessionStart` injects the policy, `Pre
 
 **What it enforces:**
 Main-loop edits and test runs are **allowed and logged** — the hook records what the architect touches instead of blocking it, and it records them *after they have run*, so a call that some other plugin's hook refused never shows up as if it happened. What it *does* deny from the main loop: the **control plane** (any `.claude` directory's hooks, agents, commands and plugins — except `plugins/data/`, which is plugin state — the `settings*.json` beside them and another plugin's hook config such as `hookkit.json`, the user's and the project's, plus `.env` files, templates like `.env.example` excepted), catch-all agents (`general-purpose`, `claude`), and the routing log itself.
+
+On Windows the PowerShell tool is guarded too, conservatively: a command that names a control-plane path is denied, and a command that looks like it writes is recorded as `unparsed` rather than parsed — PowerShell has no parser here, and the log says so instead of pretending.
 
 **What it isn't:**
 This is a seatbelt with an audit trail, not a flawless security boundary. A determined model *can* bypass it via inline scripts or exotic utilities. The goal is to make the recorded path the path of least resistance: the log (`~/.claude/opulent-log.jsonl` by default) records main-loop edits, test runs, delegations, denials, and removals, session-tagged — outcomes, not attempts: everything but a denial is written once the tool has succeeded. Work done inside lanes isn't logged, and neither is anything inside a multi-agent workflow (see above) — the record covers the architect's own hands. The log is yours to delete between sessions; the main loop is denied touching it.

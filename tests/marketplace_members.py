@@ -32,7 +32,7 @@ Member = namedtuple("Member", "name where manifest")
 
 def load():
     """The parsed marketplace manifest."""
-    with open(os.path.join(REPO, MARKETPLACE)) as f:
+    with open(os.path.join(REPO, MARKETPLACE), encoding="utf-8") as f:
         return json.load(f)
 
 

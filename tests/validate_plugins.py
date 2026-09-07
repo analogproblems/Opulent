@@ -14,6 +14,19 @@ import sys
 
 from marketplace_members import MARKETPLACE, REPO, members
 
+# These scripts print em dashes, arrows and the odd accented fixture, and the
+# console they print to is not always UTF-8: a Windows terminal defaults to
+# cp1252, where an unencodable character raises UnicodeEncodeError and takes
+# the whole run with it — a suite that dies over a dash has told you nothing
+# about the code. errors="replace" so a console that truly cannot render a
+# character prints a placeholder instead of failing. Guarded, because
+# reconfigure() arrived in 3.7 and a wrapped stdout may not have it at all.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 # shutil.which resolves .cmd/.exe shims on Windows, which bare subprocess
 # argv[0] lookup does not.
 CLAUDE = shutil.which("claude")

@@ -51,6 +51,19 @@ import sys
 import tempfile
 from pathlib import Path
 
+# These scripts print em dashes, arrows and the odd accented fixture, and the
+# console they print to is not always UTF-8: a Windows terminal defaults to
+# cp1252, where an unencodable character raises UnicodeEncodeError and takes
+# the whole run with it — a suite that dies over a dash has told you nothing
+# about the code. errors="replace" so a console that truly cannot render a
+# character prints a placeholder instead of failing. Guarded, because
+# reconfigure() arrived in 3.7 and a wrapped stdout may not have it at all.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 # Overridable so this suite can be pointed at an OLD copy of the gate and
 # watched to fail. A corpus test that has never failed is a corpus test nobody
 # has checked, and the bug it exists for was invisible to a green suite once
@@ -119,7 +132,7 @@ def new_repo(name):
     repo = os.path.join(ROOT, name)
     os.makedirs(repo)
     git(repo, "init", "-q")
-    (Path(repo) / "readme.md").write_text("nothing to see\n")
+    (Path(repo) / "readme.md").write_text("nothing to see\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
     return repo
@@ -130,17 +143,17 @@ def new_repo(name):
 def merge_resolution(repo):
     """Residue that exists ONLY in a hand-resolved merge. `log -p` prints no
     patch for a merge commit, so this content appears in no diff anywhere."""
-    (Path(repo) / "f.txt").write_text("shared\n")
+    (Path(repo) / "f.txt").write_text("shared\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "add f")
     git(repo, "switch", "-qc", "side")
-    (Path(repo) / "f.txt").write_text("side\n")
+    (Path(repo) / "f.txt").write_text("side\n", encoding="utf-8")
     git(repo, "commit", "-qam", "side")
     git(repo, "switch", "-q", "main")
-    (Path(repo) / "f.txt").write_text("main\n")
+    (Path(repo) / "f.txt").write_text("main\n", encoding="utf-8")
     git(repo, "commit", "-qam", "main")
     git(repo, "merge", "side", check=False)          # conflicts on purpose
-    (Path(repo) / "f.txt").write_text(f"{SECRET} resolved it\n")
+    (Path(repo) / "f.txt").write_text(f"{SECRET} resolved it\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "resolve")
 
@@ -148,7 +161,7 @@ def merge_resolution(repo):
 def unreachable(repo):
     """Residue orphaned by a reset — the state a failed gate tells you to
     create, and the one this gate then has to keep seeing."""
-    (Path(repo) / "leak.txt").write_text(f"{SECRET} was here\n")
+    (Path(repo) / "leak.txt").write_text(f"{SECRET} was here\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "oops")
     git(repo, "reset", "--hard", "HEAD~1", check=False)
@@ -187,7 +200,7 @@ def committer_identity(repo):
 
 def filename_only(repo):
     """Residue in a FILENAME rather than in content — a tree entry."""
-    (Path(repo) / f"{SECRET}-notes.md").write_text("innocuous contents\n")
+    (Path(repo) / f"{SECRET}-notes.md").write_text("innocuous contents\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "add notes")
 
@@ -196,14 +209,14 @@ def stored_term(repo):
     """A stored DENY term in an ordinary commit: the positive control the
     stored half never had. Run against SYNTHETIC_GATE, which is where the
     term it plants is actually denied."""
-    (Path(repo) / "notes.md").write_text(f"see the {STORED} transcripts\n")
+    (Path(repo) / "notes.md").write_text(f"see the {STORED} transcripts\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "reference")
 
 
 def nfd_spelling(repo):
     """Residue spelled in the opposite Unicode normal form to the term."""
-    (Path(repo) / "who.txt").write_text("contact josé about it\n")  # NFD
+    (Path(repo) / "who.txt").write_text("contact josé about it\n", encoding="utf-8")  # NFD
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "contact")
 
@@ -217,7 +230,7 @@ def ordinary_commit(repo):
     reported the term as supplied, matched-but-never-echoed, and clean.
     Every other plant here is a single token, so reverting that split fix
     left both suites green."""
-    (Path(repo) / "plain.txt").write_text(f"ping {SECRET} about it\n")
+    (Path(repo) / "plain.txt").write_text(f"ping {SECRET} about it\n", encoding="utf-8")
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "plain")
 
@@ -244,7 +257,7 @@ def stashed_content(repo):
     """Residue in a stash. Blind to the old corpus twice over: the stash
     commit is a MERGE commit, for which `-p` prints no patch, and refs/stash
     is outside heads/remotes."""
-    (Path(repo) / "readme.md").write_text(f"wip: do not tell {SECRET}\n")
+    (Path(repo) / "readme.md").write_text(f"wip: do not tell {SECRET}\n", encoding="utf-8")
     git(repo, "stash", "push", "-q")
 
 

@@ -37,6 +37,13 @@ failed.
      DEAD despite the plugin being installed. Say so plainly; there is no
      dial that legitimately produces this result.
 
+4b. **PowerShell (Windows only).** Where the harness offers a `PowerShell` tool, run the same
+    probe through it: `New-Item opulent-doctor-canary`. Denied with an Opulent message → the
+    PowerShell path is guarded (0.24.0+). Succeeds → clean up (`Remove-Item
+    opulent-doctor-canary`) and the verdict is PARTIAL: Bash guarded, PowerShell open — an
+    installed `hooks.json` older than 0.24.0. Skip this step where there is no PowerShell tool
+    and say so; do not run it through Bash.
+
 5. **Telemetry.** Tail the routing log — `$OPULENT_LOG` if set, else
    `~/.claude/opulent-log.jsonl`: total lines, counts per event, timestamp of
    the newest entry. The vocabulary: `edit` (a main-loop write, allowed and

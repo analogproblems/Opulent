@@ -29,6 +29,19 @@ import sys
 import tempfile
 from pathlib import Path
 
+# These scripts print em dashes, arrows and the odd accented fixture, and the
+# console they print to is not always UTF-8: a Windows terminal defaults to
+# cp1252, where an unencodable character raises UnicodeEncodeError and takes
+# the whole run with it — a suite that dies over a dash has told you nothing
+# about the code. errors="replace" so a console that truly cannot render a
+# character prints a placeholder instead of failing. Guarded, because
+# reconfigure() arrived in 3.7 and a wrapped stdout may not have it at all.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 # Overridable so this suite can be pointed at an OLD copy of the gate and
 # watched to fail — the same dial gate_corpus_selftest.py has, because a
 # redaction test that has never been seen red is a redaction test nobody has
@@ -99,7 +112,7 @@ def build_repo(repo):
     some unrelated finding happened to be absent."""
     os.makedirs(repo, exist_ok=True)
     git(repo, "init", "-q")
-    with open(os.path.join(repo, "notes.txt"), "w") as fh:
+    with open(os.path.join(repo, "notes.txt"), "w", encoding="utf-8") as fh:
         fh.write(f"reachable at {PLANTED}@example.invalid\n")
     git(repo, "add", "notes.txt")
     git(repo, "commit", "-qm", "notes")

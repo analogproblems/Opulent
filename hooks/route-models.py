@@ -31,6 +31,12 @@ being protected — knowing what the main loop touched — is a log line, not a
 denial. So writes and test runs are now ALLOWED and RECORDED, and only the
 control plane is refused.
 
+Two shells reach the filesystem, and they are judged differently on purpose.
+Bash is parsed (shlex, below). PowerShell — the primary shell the harness
+offers on Windows — is not: it is refused when its TEXT names a control-plane
+path, and otherwise recorded as `unparsed` when it looks like it writes. See
+the block comment above _PS_WRITE_TOKENS.
+
 The control plane is what governs the session that is running right now:
 settings, hooks, agent and command definitions, and the installed plugin
 tree, plus any .env. A plugin's *source* repo is ordinary code — it changes
@@ -58,12 +64,20 @@ LOG_PATH = os.environ.get("OPULENT_LOG") or os.path.join(HOME, ".claude", "opule
 # silently — open() does not expand `~` — while the self-guard below compared
 # against the unexpanded string.
 LOG_PATH = os.path.expanduser(LOG_PATH)
-if not os.path.isabs(LOG_PATH):
+# "No log" is decided on the value as CONFIGURED, before the anchor below
+# touches it. os.devnull is `nul` on Windows and `nul` is not absolute, so the
+# join turned "no log" into a real path under HOME and then guarded it: a
+# write to ~/nul was refused as if it were the audit record, and the check that
+# was supposed to spot the devnull spelling ran on a string that no longer
+# held it.
+_LOG_DISABLED = LOG_PATH in (os.devnull, "/dev/null") or (
+    sys.platform == "win32" and LOG_PATH.lower() == "nul")
+if not _LOG_DISABLED and not os.path.isabs(LOG_PATH):
     LOG_PATH = os.path.join(HOME, LOG_PATH)
-# The log guards itself below — except when it is os.devnull, which means
-# "no log": guarding that would deny every harmless `> /dev/null`.
+# The log guards itself below — except when it means "no log": guarding that
+# would deny every harmless `> /dev/null`.
 _LOG_NORM = os.path.normpath(LOG_PATH)
-_LOG_GUARDED = _LOG_NORM not in (os.devnull, "/dev/null")
+_LOG_GUARDED = not _LOG_DISABLED
 
 # Session attribution for log lines: set once in main() from the payload.
 # Empty (and omitted from the line) when the payload names no session, so
@@ -73,7 +87,7 @@ _SID = ""
 
 def _log(event, detail):
     try:
-        with open(LOG_PATH, "a") as f:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
             ts = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
             entry = {"t": ts, "event": event, "detail": str(detail)[:120]}
             if _SID:
@@ -319,6 +333,31 @@ def _under(path, prefix):
     return path == prefix or _beneath(path, prefix)
 
 
+def _posix_literal(p):
+    """True for the POSIX conventions a Bash command spells identically on
+    every platform. /tmp and /dev/null arrive as those strings in Git Bash
+    too, and Windows normpath would mangle them into \\tmp."""
+    return p.startswith(("/tmp/", "/dev/")) or p in ("/tmp", "/dev/null")
+
+
+# MSYS's drive spelling: in Git Bash on Windows, `/c/Users/x` IS `C:\Users\x`,
+# and it is how that shell hands out absolute paths by default. is_control_plane
+# reads path SEGMENTS and so never cared — a denial worked either way — but
+# everything that compares a RESOLVED absolute path did: the log's self-guard,
+# the scratch directories, the plugins/data carve-out. `/c/…` normalised to
+# `\c\…`, which equals nothing, so the audit record was rewritable through the
+# shell's own default spelling. POSIX has no such convention — there `/c/Users`
+# is an ordinary directory — so this is win32-only.
+_MSYS_DRIVE_RE = re.compile(r"^/([A-Za-z])/")
+
+
+def _msys_drive(p):
+    if sys.platform != "win32":
+        return p
+    m = _MSYS_DRIVE_RE.match(p)
+    return m.group(1).upper() + ":\\" + p[3:] if m else p
+
+
 def _resolve(target, cwd=None):
     """Absolute, normalized path for a write target. No filesystem access:
     normpath rather than realpath, so a backslash cwd and a forward-slash
@@ -335,10 +374,19 @@ def _resolve(target, cwd=None):
     # and Windows normpath would mangle them into \tmp. posixpath.normpath,
     # not a raw return: a `/tmp/x/../guard` spelling must still equal the
     # path it names, or the log's self-guard has a `..`-shaped hole.
-    if t.startswith(("/tmp/", "/dev/")) or t in ("/tmp", "/dev/null"):
+    if _posix_literal(t):
         return posixpath.normpath(t)
+    base = cwd or os.getcwd()
+    # A POSIX-literal cwd keeps its meaning for what is resolved against it.
+    # `cd /tmp && echo x > scratch.txt` stores "/tmp", and joining the target
+    # with the platform's own rules turned that into `\tmp\scratch.txt` on
+    # Windows — where is_scratch no longer recognised the scratch directory
+    # the command had just named. posixpath again, for the `..` reason above.
+    if _posix_literal(base) and not os.path.isabs(t):
+        return posixpath.normpath(posixpath.join(base, t.replace("\\", "/")))
+    t = _msys_drive(t)
     if not os.path.isabs(t):
-        t = os.path.join(os.path.normpath(cwd or os.getcwd()), t)
+        t = os.path.join(os.path.normpath(_msys_drive(base)), t)
     return os.path.normpath(t)
 
 
@@ -387,7 +435,7 @@ def is_control_plane(target, cwd=None):
 
 def is_scratch(target, cwd=None):
     p = _resolve(target, cwd)
-    if p.startswith(("/tmp/", "/dev/")) or p in ("/tmp", "/dev/null"):
+    if _posix_literal(p):
         return True
     return any(_under(p, d) for d in _SCRATCH_DIRS)
 
@@ -556,7 +604,7 @@ def _patch_targets(sources, level, cwd, prefix=""):
         if not os.path.isfile(resolved):
             continue
         try:
-            with open(resolved, errors="replace") as fh:
+            with open(resolved, encoding="utf-8", errors="replace") as fh:
                 text = fh.read(_PATCH_READ_LIMIT)
                 if len(text) == _PATCH_READ_LIMIT:
                     # A ---/+++ pair straddling the cap is completed rather
@@ -993,6 +1041,77 @@ def bash_write_targets(cmd, cwd=None):
     return found, moves, removed, bool(git_rm), patch_derived, eff_cwd
 
 
+# --- PowerShell: guarded by TEXT, deliberately without a parser -------------
+# On Windows the harness offers a PowerShell tool as the primary shell, and
+# until 0.24.0 every write it performed was neither decided on nor recorded:
+# hooks.json did not match the tool, and main() dispatched only Bash. A second
+# parser is not the answer. PowerShell's grammar shares nothing with sh's, and
+# half a parser is worse than none — it would report a confidence it does not
+# have — so this branch does two conservative things instead.
+#
+# It DECIDES on text: every token that could be a path is run through the same
+# is_control_plane and log-guard rules a Bash target is, so a command naming
+# the control plane is refused whether or not we could tell it was writing.
+# Over-refusing is the direction that costs a delegation and names the path it
+# objected to; under-refusing is the direction that costs the guarantee.
+#
+# It RECORDS as `unparsed`: a command carrying any write-shaped token gets one
+# `unparsed` line, which is exactly what that event already means — a command
+# the parser could not read, so any write inside it happened unaudited. A
+# false `unparsed` costs one audit line and never a denial. `Remove-Item` is
+# recorded that way too rather than as a `remove`: PowerShell names its
+# operand through -Path, -LiteralPath, a pipeline or a wildcard, and the
+# confidence the Bash `rm` path has does not carry over to any of those.
+_PS_WRITE_TOKENS = ("out-file", "set-content", "add-content", "copy-item",
+                    "move-item", "new-item", "remove-item", "rename-item",
+                    "tee-object", "-outfile")
+# Tokens, with quoted spans kept whole so a quoted path stays one candidate.
+_PS_TOKEN_RE = re.compile(r"'([^']*)'|\"([^\"]*)\"|([^\s'\"]+)")
+# The log's own basename, so a relatively-spelled OPULENT_LOG is still
+# recognised by _ps_pathish below (an absolute one always carries a separator).
+_LOG_BASE = posixpath.basename(_LOG_NORM.replace("\\", "/")).lower()
+
+
+def _powershell_tokens(cmd):
+    """A PowerShell command's tokens, with the spellings it writes paths in
+    normalised: $HOME and $env:USERPROFILE expanded textually, and backslashes
+    turned into forward slashes so one segment scan reads
+    `C:\\Users\\x\\.claude\\hooks` and `C:/Users/x/.claude/hooks` alike. `~` is
+    left to _resolve, which already expands it."""
+    text = cmd.replace("$env:USERPROFILE", HOME).replace("$HOME", HOME)
+    text = text.replace("\\", "/")
+    out = []
+    for m in _PS_TOKEN_RE.finditer(text):
+        tok = next((g for g in m.groups() if g is not None), "")
+        if tok:
+            out.append(tok)
+    return out
+
+
+def _ps_pathish(tok):
+    """Whether a token is worth resolving as a path. One carrying a separator
+    always is; a bare name only when its BASENAME is what the rules judge — a
+    .env file, a settings*.json, a sibling plugin's hook config, the routing
+    log. Without the filter, a PowerShell session whose cwd sat inside
+    .claude/hooks would resolve every bare word (`Get-ChildItem` included)
+    into the control plane and be refused for saying hello."""
+    if "/" in tok:
+        return True
+    low = tok.lower()
+    return (low.startswith(".env") or bool(_SETTINGS_RE.match(low))
+            or low in _CONTROL_BASENAMES
+            or (_LOG_GUARDED and low == _LOG_BASE))
+
+
+def _ps_writes(cmd):
+    """Whether a PowerShell command carries a write-shaped token: a `>`/`>>`
+    redirect, or one of the cmdlets that create, overwrite, move or delete.
+    Matched case-insensitively against the raw text — a mention inside a
+    string counts, which is the cheap half of the trade described above."""
+    low = cmd.lower()
+    return ">" in cmd or any(t in low for t in _PS_WRITE_TOKENS)
+
+
 CONTROL_PLANE_DENIAL = (
     "Routing policy: %s is the control plane — a .claude directory's "
     "settings, hooks, agents, commands or plugins (the user's or the "
@@ -1001,6 +1120,13 @@ CONTROL_PLANE_DENIAL = (
     "so every rules change leaves a record: hand it to 'opulent:coder' or "
     "'opulent:mechanic'. A plugin's source repo is not the control plane "
     "and needs no delegation.")
+
+# One text for both shells: the doctor reads this denial as its liveness
+# signal, and a probe that fires in Bash but not in PowerShell would report
+# enforcement dead on the very platform PowerShell is the default shell on.
+CANARY_DENIAL = (
+    "Routing policy: the /opulent:doctor canary (%s), denied on purpose — "
+    "enforcement is live and nothing was written." % CANARY)
 
 LOG_DENIAL = (
     "Routing policy: %s is this session's routing log — the audit record "
@@ -1094,9 +1220,7 @@ def main():
         if not recording:
             for t, rp in pairs:
                 if os.path.basename(rp) == CANARY:
-                    deny("Routing policy: the /opulent:doctor canary (%s), denied "
-                         "on purpose — enforcement is live and nothing was "
-                         "written." % CANARY, "canary:" + rp, event="probe")
+                    deny(CANARY_DENIAL, "canary:" + rp, event="probe")
                 if _LOG_GUARDED and rp == _LOG_NORM:
                     deny(LOG_DENIAL % rp, "log:" + rp)
                 if is_control_plane(rp, eff_cwd):
@@ -1137,6 +1261,41 @@ def main():
         if git_rm:
             _log("remove", cmd[:80])
         probe = _COMMENT_RE.sub(" ", _QUOTED_RE.sub(" ", _strip_heredocs(cmd)))
+        if TEST_RE.search(probe):
+            _log("test", cmd[:80])
+        allow()
+
+    if tool == "PowerShell":
+        # See the block comment above _PS_WRITE_TOKENS for why this branch
+        # decides on text and records `unparsed` rather than parsing.
+        cmd = tin.get("command", "")
+        tokens = _powershell_tokens(cmd)
+        writes = _ps_writes(cmd)
+        if not recording:
+            for tok in tokens:
+                # The canary is checked only on a write-shaped command, the
+                # way Bash checks it only on a write TARGET: `New-Item
+                # opulent-doctor-canary` is the doctor's probe, and
+                # `Get-Content opulent-doctor-canary` is a read.
+                if writes and posixpath.basename(tok) == CANARY:
+                    deny(CANARY_DENIAL, "canary:" + _resolve(tok, cwd),
+                         event="probe")
+                if not _ps_pathish(tok):
+                    continue
+                rp = _resolve(tok, cwd)
+                if _LOG_GUARDED and rp == _LOG_NORM:
+                    deny(LOG_DENIAL % rp, "log:" + rp)
+                if is_control_plane(rp, cwd):
+                    deny(CONTROL_PLANE_DENIAL % rp, "control:" + rp)
+            allow()
+        if writes:
+            _log("unparsed", "powershell: " + cmd[:80])
+        # TEST_RE is textual, so it reads a PowerShell command line as
+        # willingly as a Bash one — `cargo test` is a test run in either
+        # shell. Quoted spans and comments are blanked first, exactly as they
+        # are for Bash: PowerShell uses the same quote characters and the same
+        # `#`, so a tool name inside a string is a mention there too.
+        probe = _COMMENT_RE.sub(" ", _QUOTED_RE.sub(" ", cmd))
         if TEST_RE.search(probe):
             _log("test", cmd[:80])
         allow()

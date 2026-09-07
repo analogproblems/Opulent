@@ -65,6 +65,19 @@ import traceback
 import unicodedata
 from collections import namedtuple
 
+# These scripts print em dashes, arrows and the odd accented fixture, and the
+# console they print to is not always UTF-8: a Windows terminal defaults to
+# cp1252, where an unencodable character raises UnicodeEncodeError and takes
+# the whole run with it — a suite that dies over a dash has told you nothing
+# about the code. errors="replace" so a console that truly cannot render a
+# character prints a placeholder instead of failing. Guarded, because
+# reconfigure() arrived in 3.7 and a wrapped stdout may not have it at all.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 # text   — matched case-insensitively as a plain substring, so it is stored
 #          lowercase and the source lines are lowered before comparison
 # leak   — what finding it would tell a reader they were not meant to know
@@ -269,8 +282,14 @@ sys.excepthook = excepthook
 def git(repo, *args, ok=(0,)):
     """A git command, or a loud death. `ok` widens the accepted exit codes for
     the one case where failure is information rather than breakage."""
+    # encoding pinned rather than left to the locale: git speaks UTF-8, and
+    # this output is SCANNED — `ls-tree` filenames are one of the places the
+    # corpus test plants residue. Decoded as a Windows console's cp1252
+    # instead, a non-ASCII name arrives as mojibake and a term that is present
+    # is not found. Same bytes, same verdict, on every platform.
     p = subprocess.run(["git", "-C", repo, *args], capture_output=True,
-                       text=True, errors="replace", timeout=600)
+                       text=True, encoding="utf-8", errors="replace",
+                       timeout=600)
     if p.returncode not in ok:
         # git's own complaint is passed through, and git names paths freely —
         # so it is censored on the way out like anything else this file says.

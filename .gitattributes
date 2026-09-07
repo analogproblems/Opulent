@@ -1,0 +1,20 @@
+# Line endings are pinned to LF, in the repository and in the working tree.
+#
+# Without this the tree's endings are whatever each contributor's core.autocrlf
+# happens to be, and a Windows checkout hands the hook a different file than a
+# Linux one at the same commit. The hooks are shipped source — Claude Code runs
+# them from the checkout — so "different bytes" is not cosmetic there.
+#
+# eol=lf, not merely text=auto: text=auto alone normalises the INDEX and lets
+# autocrlf write CRLF back into the working tree. The explicit per-extension
+# lines below say the same thing again for the files this repo is made of, so a
+# future `-text` or `binary` rule cannot quietly take one of them with it.
+* text=auto eol=lf
+
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+*.ico binary

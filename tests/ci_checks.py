@@ -15,7 +15,20 @@ import tempfile
 
 from marketplace_members import MARKETPLACE, REPO, members
 
-with open(os.path.join(REPO, MARKETPLACE)) as f:
+# These scripts print em dashes, arrows and the odd accented fixture, and the
+# console they print to is not always UTF-8: a Windows terminal defaults to
+# cp1252, where an unencodable character raises UnicodeEncodeError and takes
+# the whole run with it — a suite that dies over a dash has told you nothing
+# about the code. errors="replace" so a console that truly cannot render a
+# character prints a placeholder instead of failing. Guarded, because
+# reconfigure() arrived in 3.7 and a wrapped stdout may not have it at all.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
+with open(os.path.join(REPO, MARKETPLACE), encoding="utf-8") as f:
     json.load(f)
 print(f"valid JSON: {MARKETPLACE}")
 
@@ -41,7 +54,7 @@ def dotted(raw, where):
 # longer parses as a version, and dying on one is the point, since a heading CI
 # cannot read is a release nobody can look up.
 releases = []  # (plugin, version) per heading, newest first
-with open(os.path.join(REPO, CHANGELOG)) as f:
+with open(os.path.join(REPO, CHANGELOG), encoding="utf-8") as f:
     for line in f:
         if not line.startswith("## "):
             continue
@@ -57,7 +70,7 @@ for m in members():
         # checked here; the plugin's own CI covers the rest.
         print(f"external member, tree checks skipped: {m.name} <- {m.where}")
         continue
-    with open(os.path.join(REPO, m.manifest)) as f:
+    with open(os.path.join(REPO, m.manifest), encoding="utf-8") as f:
         manifest = json.load(f)
     if manifest.get("name") != m.name:
         raise SystemExit(
@@ -370,9 +383,9 @@ print("session-start names the log path even before any activity")
 # entry is the one that would fail invisibly: denials keep working, the doctor
 # canary still reports LIVE, and the only symptom is a record that never grows
 # again — which is precisely the silent gap this plugin exists to close.
-MATCHER = "Edit|Write|NotebookEdit|MultiEdit|Bash|Task|Agent"
+MATCHER = "Edit|Write|NotebookEdit|MultiEdit|Bash|PowerShell|Task|Agent"
 HOOKS_JSON = os.path.join("hooks", "hooks.json")
-with open(os.path.join(REPO, HOOKS_JSON)) as f:
+with open(os.path.join(REPO, HOOKS_JSON), encoding="utf-8") as f:
     hooks_cfg = json.load(f).get("hooks") or {}
 
 
@@ -443,7 +456,7 @@ def route_lines(event):
             raise SystemExit(
                 f"hooks/route-models.py exited {proc.returncode} on {event}: "
                 f"{proc.stderr.strip()}")
-        with open(route_log) as fh:
+        with open(route_log, encoding="utf-8") as fh:
             entries = [json.loads(line) for line in fh if line.strip()]
     finally:
         os.unlink(route_log)
@@ -472,9 +485,9 @@ print("hooks.json: PreToolUse decides, PostToolUse records")
 # The description users read in /plugin comes from the marketplace entry; the
 # manifest carries its own copy. Two hand-maintained copies of one sentence
 # drift, and the drifted one is whichever copy the reader happens to see.
-with open(os.path.join(REPO, ".claude-plugin", "plugin.json")) as f:
+with open(os.path.join(REPO, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
     _plug = json.load(f)
-with open(os.path.join(REPO, ".claude-plugin", "marketplace.json")) as f:
+with open(os.path.join(REPO, ".claude-plugin", "marketplace.json"), encoding="utf-8") as f:
     _mkt = json.load(f)
 for entry in _mkt.get("plugins", []):
     if entry.get("name") == _plug.get("name") and \

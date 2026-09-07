@@ -12,7 +12,14 @@ half of the call it is about.
 
 Fixtures are built with os.path.join / tempfile so this suite tests the
 platform it runs on (the old fixtures hardcoded forward slashes and could
-not disagree with the code on Windows).
+not disagree with the code on Windows), and every path concatenated into a
+Bash command goes through q() — see its docstring for the 86 Windows failures
+that came of spelling one bare.
+
+Since 0.24.0 this suite runs on Linux, Windows and macOS in CI. Before that it
+ran on ubuntu-latest alone and scored 239/328 the first time anyone tried it
+on Windows, so a green run here used to say nothing about two of the three
+platforms Claude Code runs on.
 
 Telemetry cases assert the log's event list by EQUALITY, not membership: a
 hook that fabricates an extra event on every allow, or renames one event to
@@ -25,6 +32,19 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+# These scripts print em dashes, arrows and the odd accented fixture, and the
+# console they print to is not always UTF-8: a Windows terminal defaults to
+# cp1252, where an unencodable character raises UnicodeEncodeError and takes
+# the whole run with it — a suite that dies over a dash has told you nothing
+# about the code. errors="replace" so a console that truly cannot render a
+# character prints a placeholder instead of failing. Guarded, because
+# reconfigure() arrived in 3.7 and a wrapped stdout may not have it at all.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
 
 # Overridable so the suite can be pointed at an OLD copy of the hook and
 # watched to fail. A guard case that has never failed is a guard case nobody
@@ -41,9 +61,28 @@ PATCH_DIR = tempfile.mkdtemp(prefix="opulent-selftest-")
 atexit.register(shutil.rmtree, PATCH_DIR, True)
 
 
+def q(path):
+    """A path as a Bash command would have to spell it, in double quotes.
+
+    The fixtures used to concatenate paths bare, which on Windows asked the
+    hook to see a path Bash itself would never hand it: under POSIX rules an
+    unquoted backslash escapes the next character, so
+    `C:\\Users\\x\\.claude\\settings.json` arrives at the command as
+    `C:Usersx.claudesettings.json` — a relative path naming nothing. 86 of
+    this suite's 328 cases were green on Linux and failed here for that one
+    reason, and the hook was right every time: Bash strips those backslashes
+    too, so such a command cannot reach the control plane. The fixtures are
+    what had to change. A path that ENDS in a backslash gets that one doubled,
+    because inside double quotes `\\\\` is a literal backslash while a lone
+    trailing `\\` would escape the closing quote and swallow the rest of the
+    command."""
+    trailing = len(path) - len(path.rstrip("\\"))
+    return '"' + path + "\\" * trailing + '"'
+
+
 def patch_file(name, body):
     p = os.path.join(PATCH_DIR, name)
-    with open(p, "w") as fh:
+    with open(p, "w", encoding="utf-8") as fh:
         fh.write(body)
     return p
 
@@ -65,9 +104,15 @@ def run(payload, env_extra=None, field="permissionDecision"):
         # A hook that hangs has failed: pointed at the 0.11.1 hook, a suite
         # with no timeout spun forever on the FIFO case (its ERROR() could
         # never fire). TIMEOUT matches no expectation, so it always fails.
+        # encoding pinned so the verdict does not depend on the console's
+        # code page: a HOME with a non-ASCII character otherwise comes back
+        # from the hook decoded one way here and compared against a path
+        # spelled another, and the row fails for a reason that is not the
+        # hook's. The payload itself is ASCII (json.dumps escapes), so the
+        # bytes on stdin are identical either way.
         p = subprocess.run([sys.executable, HOOK], input=raw,
-                           capture_output=True, text=True, env=env,
-                           timeout=20)
+                           capture_output=True, text=True, encoding="utf-8",
+                           env=env, timeout=20)
     except subprocess.TimeoutExpired:
         return "TIMEOUT(hook hung past 20s)"
     if p.returncode != 0:
@@ -109,6 +154,21 @@ def bash(cmd, agent=None, cwd=None, sid=None):
 
 def edit(tool, path, agent=None, cwd=None, sid=None):
     d = {"tool_name": tool, "tool_input": {"file_path": path}}
+    if agent:
+        d["agent_id"] = agent
+    if cwd:
+        d["cwd"] = cwd
+    if sid:
+        d["session_id"] = sid
+    return d
+
+
+def powershell(cmd, agent=None, cwd=None, sid=None):
+    """A PowerShell tool call — the shape the harness sends on Windows, where
+    PowerShell is the primary shell. Until 0.24.0 hooks.json did not match the
+    tool and the hook did not dispatch it, so every write it performed was
+    neither decided on nor recorded."""
+    d = {"tool_name": "PowerShell", "tool_input": {"command": cmd}}
     if agent:
         d["agent_id"] = agent
     if cwd:
@@ -166,6 +226,19 @@ PLUGIN_DATA = os.path.join(HOME, ".claude", "plugins", "data", "hookkit", "state
 # A sibling plugin's hook config, sitting directly under .claude the way
 # settings.json does and deciding as surely as it does whether a gate runs.
 HOOKKIT = os.path.join(HOME, ".claude", "hookkit.json")
+
+# Windows path spellings, written as literals rather than built with
+# os.path.join, because the point of each is the SPELLING and not the platform
+# this suite happens to run on. All three rows below run everywhere:
+# is_control_plane reads path segments, so a `.claude/hooks` component is
+# judged the same on Linux, macOS and Windows.
+WIN_UNQUOTED = r"C:\Users\x\.claude\settings.json"
+WIN_HOOK = r"C:\Users\x\.claude\hooks\y.py"
+WIN_AGENT = r"C:\Users\x\.claude\agents\y.md"
+# MSYS's drive spelling: in Git Bash on Windows `/c/Users/x` IS `C:\Users\x`,
+# and it is the spelling that shell hands out by default.
+MSYS_AGENT = "/c/Users/x/.claude/agents/y.md"
+MSYS_NOTES = "/c/Users/x/notes.txt"
 
 # Real directories, so the cp/mv "destination is a directory" branch can be
 # tested by what the filesystem says rather than by a trailing slash.
@@ -355,7 +428,7 @@ CASES = [
     ("main Edit plugin src hook",    edit("Edit", os.path.join(SRC, "hooks", "route-models.py")),      "allow"),
     ("main Edit plugin src agent",   edit("Edit", os.path.join(SRC, "agents", "coder.md")),            "allow"),
     ("main Edit plugin src command", edit("Edit", os.path.join(SRC, "commands", "doctor.md")),         "allow"),
-    ("main Bash tee plugin src",     bash("ls | tee " + os.path.join(SRC, "hooks", "x.py")),           "allow"),
+    ("main Bash tee plugin src",     bash("ls | tee " + q(os.path.join(SRC, "hooks", "x.py"))),           "allow"),
     # --- the control plane: what governs the session that is running now ---
     ("main Write installed plugin",  edit("Write", os.path.join(HOME, ".claude", "plugins", "opulent", "hooks", "route-models.py")), "deny"),
     ("main Write plugins cache",     edit("Write", os.path.join(HOME, ".claude", "plugins", "cache", "x.json")), "deny"),
@@ -366,8 +439,8 @@ CASES = [
     # remembers anything unreadable and unfixable from the main loop, and
     # bought no governance at all.
     ("main Write plugin data file",  edit("Write", PLUGIN_DATA),                        "allow"),
-    ("main Bash redirect plugin data", bash("echo {} > " + PLUGIN_DATA),                "allow"),
-    ("main Bash rm plugin data",     bash("rm " + PLUGIN_DATA),                         "allow"),
+    ("main Bash redirect plugin data", bash("echo {} > " + q(PLUGIN_DATA)),                "allow"),
+    ("main Bash rm plugin data",     bash("rm " + q(PLUGIN_DATA)),                         "allow"),
     ("main Write project plugin data", edit("Write", os.path.join(".claude", "plugins", "data", "p", "s.json"), cwd=CWD), "allow"),
     # `data` has to sit immediately after `plugins` to be the carve-out: an
     # installed plugin's own data/ directory is part of that plugin's tree.
@@ -395,42 +468,61 @@ CASES = [
     # A trailing space must not defeat the basename rules.
     ("main Write settings + space",  edit("Write", SETTINGS + " "),                     "deny"),
     ("subagent Write settings",      edit("Write", SETTINGS, "a1"),                     "allow"),
-    ("main Bash redirect settings",  bash("echo x > " + SETTINGS),                      "deny"),
-    ("main Bash cp into plugins",    bash("cp x.py " + os.path.join(HOME, ".claude", "plugins", "p", "h.py")), "deny"),
+    ("main Bash redirect settings",  bash("echo x > " + q(SETTINGS)),                      "deny"),
+    ("main Bash cp into plugins",    bash("cp x.py " + q(os.path.join(HOME, ".claude", "plugins", "p", "h.py"))), "deny"),
     ("main Bash tee project .env",   bash("echo K=v | tee .env", cwd=CWD),              "deny"),
+    # --- Windows path spellings, judged the way Bash hands them over ---
+    # An UNQUOTED backslash path is not a control-plane path, because Bash
+    # never delivers one: under POSIX rules a backslash escapes the character
+    # behind it, so this command's target arrives as
+    # `C:Usersx.claudesettings.json` — a relative name under the cwd, matching
+    # nothing. The hook says what Bash does, and this is allow. (The record's
+    # half of the claim — that no `edit` line names the settings file — is
+    # asserted after the telemetry table, where a NOT-contains check fits.)
+    ("unquoted backslash path is not a control-plane path",
+     bash("echo x > " + WIN_UNQUOTED, cwd=CWD),                                         "allow"),
+    # ... but a QUOTED one is delivered intact, in either quote, and that is
+    # the spelling a person on Windows actually types.
+    ("double-quoted backslash path into hooks is denied",
+     bash('cp x "' + WIN_HOOK + '"', cwd=CWD),                                          "deny"),
+    ("single-quoted backslash path into agents is denied",
+     bash("cp x '" + WIN_AGENT + "'", cwd=CWD),                                         "deny"),
+    # Git Bash's own default spelling reaches the same files.
+    ("MSYS-spelled control-plane path is denied",
+     bash("cp x " + MSYS_AGENT, cwd=CWD),                                               "deny"),
     # --- a patch writes the files named inside it, not the ones on the argv ---
-    ("main git apply settings patch", bash("git apply " + SETTINGS_PATCH, cwd=CWD),     "deny"),
-    ("main patch stdin settings",     bash("patch -p1 < " + SETTINGS_PATCH, cwd=CWD),   "deny"),
-    ("main patch arg user hook",      bash("patch -p1 " + HOOK_PATCH, cwd=HOME),        "deny"),
+    ("main git apply settings patch", bash("git apply " + q(SETTINGS_PATCH), cwd=CWD),     "deny"),
+    ("main patch stdin settings",     bash("patch -p1 < " + q(SETTINGS_PATCH), cwd=CWD),   "deny"),
+    ("main patch arg user hook",      bash("patch -p1 " + q(HOOK_PATCH), cwd=HOME),        "deny"),
     # -i names the patch; the positional beside it is the file being patched.
-    ("main patch -i user hook",       bash("patch -i " + HOOK_PATCH + " x.py", cwd=HOME), "deny"),
-    ("main patch creates .env",       bash("git apply -p1 " + ENV_PATCH, cwd=CWD),      "deny"),
+    ("main patch -i user hook",       bash("patch -i " + q(HOOK_PATCH) + " x.py", cwd=HOME), "deny"),
+    ("main patch creates .env",       bash("git apply -p1 " + q(ENV_PATCH), cwd=CWD),      "deny"),
     # `git apply [<patch>...]` applies every patch it is given, so the verdict
     # must not depend on which one happens to be last on the line.
-    ("main git apply evil then ok",   bash("git apply " + SETTINGS_PATCH + " " + SRC_PATCH, cwd=CWD), "deny"),
-    ("main git apply ok then evil",   bash("git apply " + SRC_PATCH + " " + SETTINGS_PATCH, cwd=CWD), "deny"),
-    ("main git apply two ok patches", bash("git apply -p1 " + SRC_PATCH + " " + SRC2_PATCH, cwd=CWD), "allow"),
+    ("main git apply evil then ok",   bash("git apply " + q(SETTINGS_PATCH) + " " + q(SRC_PATCH), cwd=CWD), "deny"),
+    ("main git apply ok then evil",   bash("git apply " + q(SRC_PATCH) + " " + q(SETTINGS_PATCH), cwd=CWD), "deny"),
+    ("main git apply two ok patches", bash("git apply -p1 " + q(SRC_PATCH) + " " + q(SRC2_PATCH), cwd=CWD), "allow"),
     # A rename has no ---/+++ pair; the `diff --git` line is the only header.
-    ("main git apply rename to hook", bash("git apply " + RENAME_PATCH, cwd=CWD),       "deny"),
-    ("main patch rename to hook",     bash("patch -p1 " + RENAME_PATCH, cwd=CWD),       "deny"),
-    ("main git apply plain rename",   bash("git apply -p1 " + SRC_RENAME_PATCH, cwd=CWD), "allow"),
+    ("main git apply rename to hook", bash("git apply " + q(RENAME_PATCH), cwd=CWD),       "deny"),
+    ("main patch rename to hook",     bash("patch -p1 " + q(RENAME_PATCH), cwd=CWD),       "deny"),
+    ("main git apply plain rename",   bash("git apply -p1 " + q(SRC_RENAME_PATCH), cwd=CWD), "allow"),
     # A space in the renamed file's name must not be a way out of the check,
     # quoted by git or not.
-    ("main git apply spaced rename",  bash("git apply -p1 " + SPACED_RENAME_PATCH, cwd=CWD), "deny"),
-    ("main git apply spaced no -p",   bash("git apply " + SPACED_RENAME_PATCH, cwd=CWD),  "deny"),
-    ("main patch spaced rename",      bash("patch -p1 < " + SPACED_RENAME_PATCH, cwd=CWD), "deny"),
-    ("main git apply quoted rename",  bash("git apply -p1 " + QUOTED_RENAME_PATCH, cwd=CWD), "deny"),
-    ("main git apply spaced chmod",   bash("git apply -p1 " + SPACED_MODE_PATCH, cwd=CWD), "deny"),
-    ("main git apply spaced src rename", bash("git apply -p1 " + SPACED_SRC_RENAME_PATCH, cwd=CWD), "allow"),
+    ("main git apply spaced rename",  bash("git apply -p1 " + q(SPACED_RENAME_PATCH), cwd=CWD), "deny"),
+    ("main git apply spaced no -p",   bash("git apply " + q(SPACED_RENAME_PATCH), cwd=CWD),  "deny"),
+    ("main patch spaced rename",      bash("patch -p1 < " + q(SPACED_RENAME_PATCH), cwd=CWD), "deny"),
+    ("main git apply quoted rename",  bash("git apply -p1 " + q(QUOTED_RENAME_PATCH), cwd=CWD), "deny"),
+    ("main git apply spaced chmod",   bash("git apply -p1 " + q(SPACED_MODE_PATCH), cwd=CWD), "deny"),
+    ("main git apply spaced src rename", bash("git apply -p1 " + q(SPACED_SRC_RENAME_PATCH), cwd=CWD), "allow"),
     # Quoted ---/+++ headers: the name inside the quotes is the one judged.
-    ("main git apply quoted settings", bash("git apply -p1 " + QUOTED_SETTINGS_PATCH, cwd=CWD), "deny"),
+    ("main git apply quoted settings", bash("git apply -p1 " + q(QUOTED_SETTINGS_PATCH), cwd=CWD), "deny"),
     # The shell honours the LAST `<`, so that is the file actually applied.
-    ("main patch double redirect",    bash("patch -p1 < " + SRC_PATCH + " < " + SETTINGS_PATCH, cwd=CWD), "deny"),
-    ("main git apply double redirect", bash("git apply < " + SRC_PATCH + " < " + SETTINGS_PATCH, cwd=CWD), "deny"),
+    ("main patch double redirect",    bash("patch -p1 < " + q(SRC_PATCH) + " < " + q(SETTINGS_PATCH), cwd=CWD), "deny"),
+    ("main git apply double redirect", bash("git apply < " + q(SRC_PATCH) + " < " + q(SETTINGS_PATCH), cwd=CWD), "deny"),
     # A pair straddling the read cap is completed, not dropped.
-    ("main patch straddles read cap", bash("patch -p1 < " + STRADDLE_PATCH, cwd=CWD),   "deny"),
+    ("main patch straddles read cap", bash("patch -p1 < " + q(STRADDLE_PATCH), cwd=CWD),   "deny"),
     # `git am` is `git apply` for format-patch output — same machinery.
-    ("main git am settings patch",    bash("git am " + SETTINGS_PATCH, cwd=CWD),        "deny"),
+    ("main git am settings patch",    bash("git am " + q(SETTINGS_PATCH), cwd=CWD),        "deny"),
     # --- 2026-08-13 review: each of these was ALLOWED, most of them silently.
     # Every case below was traced against the real tool before being written,
     # and every one of them fails against the hook as it stood.
@@ -439,35 +531,35 @@ CASES = [
     # subcommand search, so the whole apply branch never ran: no denial, and no
     # log line either. The `=` spellings never had the problem, which is why
     # the bug survived: `--git-dir=x apply` works.
-    ("main git -C apply settings",    bash("git -C . apply " + SETTINGS_PATCH, cwd=CWD), "deny"),
-    ("main git --git-dir apply",      bash("git --git-dir .git apply " + SETTINGS_PATCH, cwd=CWD), "deny"),
+    ("main git -C apply settings",    bash("git -C . apply " + q(SETTINGS_PATCH), cwd=CWD), "deny"),
+    ("main git --git-dir apply",      bash("git --git-dir .git apply " + q(SETTINGS_PATCH), cwd=CWD), "deny"),
     # The tool applies INTO a directory the headers never mention, so an
     # innocent header was judged while a control-plane file was rewritten —
     # and the audit line named the innocent one.
-    ("main git apply --directory",    bash("git apply --directory=.claude/hooks " + SRC_PATCH, cwd=CWD), "deny"),
-    ("main patch -d control dir",     bash("patch -d .claude/hooks -p1 < " + SRC_PATCH, cwd=CWD), "deny"),
-    ("main patch -o control file",    bash("patch -p1 -o .claude/hooks/x.py < " + SRC_PATCH, cwd=CWD), "deny"),
+    ("main git apply --directory",    bash("git apply --directory=.claude/hooks " + q(SRC_PATCH), cwd=CWD), "deny"),
+    ("main patch -d control dir",     bash("patch -d .claude/hooks -p1 < " + q(SRC_PATCH), cwd=CWD), "deny"),
+    ("main patch -o control file",    bash("patch -p1 -o .claude/hooks/x.py < " + q(SRC_PATCH), cwd=CWD), "deny"),
     # GNU patch reads the patch from stdin when given one positional, so the
     # positional is the file being patched — consulting the redirect only when
     # no positional existed made this exact spelling allowed.
-    ("main patch positional + stdin", bash("patch -p1 x.py < " + SETTINGS_PATCH, cwd=CWD), "deny"),
+    ("main patch positional + stdin", bash("patch -p1 x.py < " + q(SETTINGS_PATCH), cwd=CWD), "deny"),
     # Both tools consume `./` as the component -p1 strips.
-    ("main patch ./ header -p1",      bash("patch -p1 < " + DOT_PATCH, cwd=CWD),        "deny"),
+    ("main patch ./ header -p1",      bash("patch -p1 < " + q(DOT_PATCH), cwd=CWD),        "deny"),
     # tee and touch write EVERY operand; a decoy first argument hid the rest.
-    ("main tee decoy then settings",  bash("ls | tee decoy.txt " + SETTINGS),           "deny"),
-    ("main touch decoy then hook",    bash("touch decoy.txt " + os.path.join(HOOKS_DIR, "x.py")), "deny"),
+    ("main tee decoy then settings",  bash("ls | tee decoy.txt " + q(SETTINGS)),           "deny"),
+    ("main touch decoy then hook",    bash("touch decoy.txt " + q(os.path.join(HOOKS_DIR, "x.py"))), "deny"),
     # -t puts the destination FIRST, so "last operand is the destination" was
     # exactly backwards — and the log named the source file instead.
-    ("main cp -t into hooks",         bash("cp -t " + HOOKS_DIR + " evil.py"),          "deny"),
-    ("main mv -t into agents",        bash("mv -t " + os.path.join(HOME, ".claude", "agents") + " a.md"), "deny"),
+    ("main cp -t into hooks",         bash("cp -t " + q(HOOKS_DIR) + " evil.py"),          "deny"),
+    ("main mv -t into agents",        bash("mv -t " + q(os.path.join(HOME, ".claude", "agents")) + " a.md"), "deny"),
     # A prefix's own flag used to blank the detection of the command behind it.
-    ("main sudo -u root cp hook",     bash("sudo -u root cp x.py " + os.path.join(HOOKS_DIR, "h.py")), "deny"),
-    ("main nice -n 10 cp hook",       bash("nice -n 10 cp x.py " + os.path.join(HOOKS_DIR, "h.py")), "deny"),
+    ("main sudo -u root cp hook",     bash("sudo -u root cp x.py " + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
+    ("main nice -n 10 cp hook",       bash("nice -n 10 cp x.py " + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
     # ... but a prefix flag that takes NO value must not swallow the command.
     ("main sudo -n cp ordinary",      bash("sudo -n cp a.txt b.txt", cwd=CWD),          "allow"),
     # GNU sed's documented long form.
-    ("main sed --in-place settings",  bash("sed --in-place s/a/b/ " + SETTINGS),        "deny"),
-    ("main sed --in-place= settings", bash("sed --in-place=bak s/a/b/ " + SETTINGS),    "deny"),
+    ("main sed --in-place settings",  bash("sed --in-place s/a/b/ " + q(SETTINGS)),        "deny"),
+    ("main sed --in-place= settings", bash("sed --in-place=bak s/a/b/ " + q(SETTINGS)),    "deny"),
     # Case-insensitive filesystems name the same files the guard protects, on
     # the two platforms the README claims this holds for.
     ("main Write .CLAUDE hooks",      edit("Write", os.path.join(HOME, ".CLAUDE", "hooks", "x.py")), "deny"),
@@ -484,73 +576,73 @@ CASES = [
     # A named pipe blocks open() forever; the size cap bounds how much is read,
     # not whether the read returns. isfile() rejects it, and the ERROR() a hang
     # would produce is what this case is really watching for.
-    ("main git apply a FIFO",         bash("git apply " + FIFO_PATCH, cwd=CWD),         "allow"),
+    ("main git apply a FIFO",         bash("git apply " + q(FIFO_PATCH), cwd=CWD),         "allow"),
     # Fail open: an unreadable or unparseable patch must never block a session.
-    ("main patch file is missing",    bash("git apply " + MISSING_PATCH, cwd=CWD),      "allow"),
-    ("main patch file is not a patch", bash("patch -p1 < " + NOT_A_PATCH, cwd=CWD),     "allow"),
+    ("main patch file is missing",    bash("git apply " + q(MISSING_PATCH), cwd=CWD),      "allow"),
+    ("main patch file is not a patch", bash("patch -p1 < " + q(NOT_A_PATCH), cwd=CWD),     "allow"),
     # Inside a subagent the patch is nobody's business — the blanket allow wins.
-    ("subagent git apply settings",   bash("git apply " + SETTINGS_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent patch stdin settings", bash("patch -p1 < " + SETTINGS_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent patch arg user hook",  bash("patch -p1 " + HOOK_PATCH, "a1", cwd=HOME),  "allow"),
-    ("subagent patch -i user hook",   bash("patch -i " + HOOK_PATCH + " x.py", "a1", cwd=HOME), "allow"),
-    ("subagent patch creates .env",   bash("git apply -p1 " + ENV_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent git apply two patches", bash("git apply " + SETTINGS_PATCH + " " + SRC_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent git apply rename",     bash("git apply " + RENAME_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent spaced rename",        bash("git apply -p1 " + SPACED_RENAME_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent quoted rename",        bash("git apply -p1 " + QUOTED_RENAME_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent patch double redirect", bash("patch -p1 < " + SRC_PATCH + " < " + SETTINGS_PATCH, "a1", cwd=CWD), "allow"),
-    ("subagent git am settings",      bash("git am " + SETTINGS_PATCH, "a1", cwd=CWD),  "allow"),
+    ("subagent git apply settings",   bash("git apply " + q(SETTINGS_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent patch stdin settings", bash("patch -p1 < " + q(SETTINGS_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent patch arg user hook",  bash("patch -p1 " + q(HOOK_PATCH), "a1", cwd=HOME),  "allow"),
+    ("subagent patch -i user hook",   bash("patch -i " + q(HOOK_PATCH) + " x.py", "a1", cwd=HOME), "allow"),
+    ("subagent patch creates .env",   bash("git apply -p1 " + q(ENV_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent git apply two patches", bash("git apply " + q(SETTINGS_PATCH) + " " + q(SRC_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent git apply rename",     bash("git apply " + q(RENAME_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent spaced rename",        bash("git apply -p1 " + q(SPACED_RENAME_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent quoted rename",        bash("git apply -p1 " + q(QUOTED_RENAME_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent patch double redirect", bash("patch -p1 < " + q(SRC_PATCH) + " < " + q(SETTINGS_PATCH), "a1", cwd=CWD), "allow"),
+    ("subagent git am settings",      bash("git am " + q(SETTINGS_PATCH), "a1", cwd=CWD),  "allow"),
     # --- writers inside shell compounds: reserved words are not commands ---
-    ("main for-loop cp into hooks",   bash("for f in a.py b.py; do cp $f " + HOOKS_DIR + "/; done"), "deny"),
-    ("main if/then cp into hooks",    bash("if true; then cp x.py " + os.path.join(HOOKS_DIR, "x.py") + "; fi"), "deny"),
-    ("main brace group touch hook",   bash("{ touch " + os.path.join(HOOKS_DIR, "t.py") + "; }"), "deny"),
-    ("main while/do tee settings",    bash("while read l; do echo $l | tee " + SETTINGS + "; done"), "deny"),
-    ("main case arm cp into hooks",   bash("case $1 in x) echo ok ;; y) cp f.py " + os.path.join(HOOKS_DIR, "h.py") + " ;; esac"), "deny"),
+    ("main for-loop cp into hooks",   bash("for f in a.py b.py; do cp $f " + q(HOOKS_DIR) + "/; done"), "deny"),
+    ("main if/then cp into hooks",    bash("if true; then cp x.py " + q(os.path.join(HOOKS_DIR, "x.py")) + "; fi"), "deny"),
+    ("main brace group touch hook",   bash("{ touch " + q(os.path.join(HOOKS_DIR, "t.py")) + "; }"), "deny"),
+    ("main while/do tee settings",    bash("while read l; do echo $l | tee " + q(SETTINGS) + "; done"), "deny"),
+    ("main case arm cp into hooks",   bash("case $1 in x) echo ok ;; y) cp f.py " + q(os.path.join(HOOKS_DIR, "h.py")) + " ;; esac"), "deny"),
     # ... while words that merely LOOK like reserved words stay data.
     ("main echo do-mention (no FP)",  bash("echo do a barrel roll > /tmp/x"),           "allow"),
     # --- cp/mv with a directory destination classify the landed file ---
-    ("main cp settings into ~/.claude/", bash("cp settings.json " + os.path.join(HOME, ".claude") + os.sep), "deny"),
+    ("main cp settings into ~/.claude/", bash("cp settings.json " + q(os.path.join(HOME, ".claude") + os.sep)), "deny"),
     ("main cp settings into real dir",   bash("cp settings.json .claude", cwd=DEST_PROJ), "deny"),
-    ("main xargs cp -t into hooks",      bash("ls *.py | xargs cp -t " + HOOKS_DIR),    "deny"),
+    ("main xargs cp -t into hooks",      bash("ls *.py | xargs cp -t " + q(HOOKS_DIR)),    "deny"),
     # --- find -exec runs the command it generates ---
-    ("main find -exec cp into hooks",    bash("find . -name '*.py' -exec cp {} " + HOOKS_DIR + "/ \\;"), "deny"),
+    ("main find -exec cp into hooks",    bash("find . -name '*.py' -exec cp {} " + q(HOOKS_DIR) + "/ \\;"), "deny"),
     # --- csh-form redirect ---
-    ("main >& into settings",            bash("make build >& " + SETTINGS),             "deny"),
+    ("main >& into settings",            bash("make build >& " + q(SETTINGS)),             "deny"),
     ("main >&2 is not a file",           bash("echo x >&2"),                            "allow"),
     # --- prefix gaps: the wrapped command is still the command ---
-    ("main timeout cp into hooks",       bash("timeout 30 cp x.py " + os.path.join(HOOKS_DIR, "h.py")), "deny"),
-    ("main nohup tee settings",          bash("nohup tee " + SETTINGS),                 "deny"),
-    ("main setsid cp into hooks",        bash("setsid cp x.py " + os.path.join(HOOKS_DIR, "h.py")), "deny"),
-    ("main stdbuf tee settings",         bash("stdbuf -o0 tee " + SETTINGS),            "deny"),
-    ("main sudo --user cp hook",         bash("sudo --user root cp x.py " + os.path.join(HOOKS_DIR, "h.py")), "deny"),
-    ("main xargs -a cp -t hooks",        bash("xargs -a list.txt cp -t " + HOOKS_DIR),  "deny"),
+    ("main timeout cp into hooks",       bash("timeout 30 cp x.py " + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
+    ("main nohup tee settings",          bash("nohup tee " + q(SETTINGS)),                 "deny"),
+    ("main setsid cp into hooks",        bash("setsid cp x.py " + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
+    ("main stdbuf tee settings",         bash("stdbuf -o0 tee " + q(SETTINGS)),            "deny"),
+    ("main sudo --user cp hook",         bash("sudo --user root cp x.py " + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
+    ("main xargs -a cp -t hooks",        bash("xargs -a list.txt cp -t " + q(HOOKS_DIR)),  "deny"),
     # --- touch value options are not targets ---
-    ("main touch -r ref is not target",  bash("touch -r " + SETTINGS + " stamp", cwd=CWD), "allow"),
+    ("main touch -r ref is not target",  bash("touch -r " + q(SETTINGS) + " stamp", cwd=CWD), "allow"),
     # --- heredoc bodies are content, not commands ---
     ("main heredoc mentions settings",   bash(HEREDOC_MENTION, cwd=CWD),                "allow"),
-    ("main redirect then heredoc",       bash("cat > " + SETTINGS + " <<EOF\nx\nEOF"),  "deny"),
-    ("main heredoc then redirect",       bash("cat <<EOF > " + SETTINGS + "\nx\nEOF"),  "deny"),
+    ("main redirect then heredoc",       bash("cat > " + q(SETTINGS) + " <<EOF\nx\nEOF"),  "deny"),
+    ("main heredoc then redirect",       bash("cat <<EOF > " + q(SETTINGS) + "\nx\nEOF"),  "deny"),
     # ... and a stray `<<` that is NOT a heredoc must not eat what follows.
-    ("main here-string then cp",         bash('read -r a b <<< "$line"\ncp x.py ' + os.path.join(HOOKS_DIR, "x.py")), "deny"),
-    ("main arithmetic shift then cp",    bash("n=$((1 << 3))\ncp x.py " + os.path.join(HOOKS_DIR, "x.py")), "deny"),
+    ("main here-string then cp",         bash('read -r a b <<< "$line"\ncp x.py ' + q(os.path.join(HOOKS_DIR, "x.py"))), "deny"),
+    ("main arithmetic shift then cp",    bash("n=$((1 << 3))\ncp x.py " + q(os.path.join(HOOKS_DIR, "x.py"))), "deny"),
     # --- /usr/bin/time takes value options; the wrapped command is judged ---
-    ("main /usr/bin/time -o cp hook",    bash("/usr/bin/time -o times.txt cp evil.py " + os.path.join(HOOKS_DIR, "h.py")), "deny"),
-    ("main time keyword cp hook",        bash("time cp x.py " + os.path.join(HOOKS_DIR, "h.py")), "deny"),
+    ("main /usr/bin/time -o cp hook",    bash("/usr/bin/time -o times.txt cp evil.py " + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
+    ("main time keyword cp hook",        bash("time cp x.py " + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
     # --- newline is a command separator, like `;` ---
     ("main newline cd then settings",    bash("cd .claude\necho x > settings.json", cwd=CWD), "deny"),
-    ("main multi-line for-loop cp",      bash("for f in a.py b.py\ndo\ncp $f " + HOOKS_DIR + "/\ndone"), "deny"),
-    ("main comment then cp hook",        bash("# staging the hook\ncp x.py " + os.path.join(HOOKS_DIR, "x.py")), "deny"),
+    ("main multi-line for-loop cp",      bash("for f in a.py b.py\ndo\ncp $f " + q(HOOKS_DIR) + "/\ndone"), "deny"),
+    ("main comment then cp hook",        bash("# staging the hook\ncp x.py " + q(os.path.join(HOOKS_DIR, "x.py"))), "deny"),
     # --- install writes directories with -d, and via -t ---
-    ("main install -d control dir",      bash("install -d " + HOOKS_DIR),               "deny"),
-    ("main install -t into hooks",       bash("install -t " + HOOKS_DIR + " x.py"),     "deny"),
+    ("main install -d control dir",      bash("install -d " + q(HOOKS_DIR)),               "deny"),
+    ("main install -t into hooks",       bash("install -t " + q(HOOKS_DIR) + " x.py"),     "deny"),
     # --- ln -t targets the directory, not the last operand ---
-    ("main ln -t into hooks",            bash("ln -t " + HOOKS_DIR + " x.py"),          "deny"),
+    ("main ln -t into hooks",            bash("ln -t " + q(HOOKS_DIR) + " x.py"),          "deny"),
     # --- accident-shaped neighbor verbs ---
-    ("main install into hooks",          bash("install m.py " + os.path.join(HOOKS_DIR, "m.py")), "deny"),
-    ("main ln -sf into hooks",           bash("ln -sf x.py " + os.path.join(HOOKS_DIR, "link.py")), "deny"),
-    ("main dd of= into hooks",           bash("dd if=/dev/zero of=" + os.path.join(HOOKS_DIR, "h.py")), "deny"),
-    ("main curl -o into hooks",          bash("curl -o " + os.path.join(HOOKS_DIR, "x.py") + " https://example.com"), "deny"),
-    ("main wget -O into hooks",          bash("wget -O " + os.path.join(HOOKS_DIR, "x.py") + " https://example.com"), "deny"),
+    ("main install into hooks",          bash("install m.py " + q(os.path.join(HOOKS_DIR, "m.py"))), "deny"),
+    ("main ln -sf into hooks",           bash("ln -sf x.py " + q(os.path.join(HOOKS_DIR, "link.py"))), "deny"),
+    ("main dd of= into hooks",           bash("dd if=/dev/zero of=" + q(os.path.join(HOOKS_DIR, "h.py"))), "deny"),
+    ("main curl -o into hooks",          bash("curl -o " + q(os.path.join(HOOKS_DIR, "x.py")) + " https://example.com"), "deny"),
+    ("main wget -O into hooks",          bash("wget -O " + q(os.path.join(HOOKS_DIR, "x.py")) + " https://example.com"), "deny"),
     ("main curl without -o (no FP)",     bash("curl https://example.com"),              "allow"),
     ("main ln single operand (no FP)",   bash("ln -s /usr/bin/python3"),                "allow"),
     # --- leading cd moves the judged directory ---
@@ -593,6 +685,39 @@ CASES = [
     ("main Bash redirect devnull",   bash("git log --oneline > /dev/null"),             "allow"),
     ("main Bash fd duplication",     bash("some_command 2>&1"),                         "allow"),
     ("main Bash quoted gt (no FP)",  bash("git commit -m 'refactor: a > b mapping'"),   "allow"),
+    # --- PowerShell: the other shell that reaches the filesystem ---
+    # Guarded by TEXT, not by a parser — see the block comment above
+    # _PS_WRITE_TOKENS in route-models.py. A command naming a control-plane
+    # path is refused whether or not the hook could tell it was writing.
+    ("PowerShell Set-Content into settings.json is denied",
+     powershell("Set-Content -Path " + q(SETTINGS) + " -Value '{}'", cwd=CWD),          "deny"),
+    ("PowerShell Copy-Item into .claude/hooks is denied",
+     powershell("Copy-Item x.py " + q(os.path.join(HOOKS_DIR, "y.py")), cwd=CWD),       "deny"),
+    ("PowerShell Remove-Item of a user agent def is denied",
+     powershell("Remove-Item " + q(os.path.join(HOME, ".claude", "agents", "x.md")), cwd=CWD), "deny"),
+    # The mirror image of the Bash row above, and deliberately the opposite
+    # verdict: PowerShell does not treat a backslash as an escape, so an
+    # unquoted Windows path reaches the cmdlet intact and must be judged.
+    ("PowerShell backslash path into hooks is denied unquoted too",
+     powershell("Copy-Item x.py " + WIN_HOOK, cwd=CWD),                                 "deny"),
+    # ... and the false positives that are NOT being added: the same cmdlets
+    # writing ordinary files, and a plugin's SOURCE tree, stay allowed.
+    ("PowerShell Set-Content into an ordinary file is allowed",
+     powershell("Set-Content build.log -Value ok", cwd=CWD),                            "allow"),
+    ("PowerShell Copy-Item into a plugin source tree is allowed",
+     powershell("Copy-Item x.py " + q(os.path.join(SRC, "hooks", "y.py")), cwd=CWD),    "allow"),
+    ("PowerShell git status is allowed",
+     powershell("git status", cwd=CWD),                                                 "allow"),
+    # A bare cmdlet name is not a path. Without that filter a PowerShell
+    # session whose cwd sat inside .claude/hooks would resolve every word into
+    # the control plane and be refused for saying hello.
+    ("PowerShell Get-ChildItem in a control-plane cwd is allowed",
+     {"tool_name": "PowerShell", "tool_input": {"command": "Get-ChildItem"},
+      "cwd": FAKE_HOOKS_CWD},                                                           "allow"),
+    ("subagent PowerShell into settings is allowed",
+     powershell("Set-Content " + q(SETTINGS) + " -Value x", "a1", cwd=CWD),             "allow"),
+    ("PostToolUse PowerShell control plane is not denied",
+     post(powershell("Set-Content " + q(SETTINGS) + " -Value x", cwd=CWD)),             "allow"),
     # --- delegation routing: unchanged, this was never the lockout ---
     ("main Task->Explore allowed",   task("Explore"),                                   "allow"),
     ("main Agent->Explore allowed",  {"tool_name": "Agent",
@@ -655,7 +780,7 @@ def logged(payload, env_extra=None):
         env.update(env_extra)
     try:
         got = run(payload, env)
-        with open(f.name) as fh:
+        with open(f.name, encoding="utf-8") as fh:
             entries = [json.loads(line) for line in fh if line.strip()]
     finally:
         os.unlink(f.name)
@@ -718,9 +843,9 @@ TELEMETRY = [
     ("a write under plugins/data is recorded as an edit",
      post(edit("Write", PLUGIN_DATA)), "allow", ["edit"], PLUGIN_DATA),
     ("a redirect into plugins/data is recorded as an edit",
-     post(bash("echo {} > " + PLUGIN_DATA, cwd=CWD)), "allow", ["edit"], PLUGIN_DATA),
+     post(bash("echo {} > " + q(PLUGIN_DATA), cwd=CWD)), "allow", ["edit"], PLUGIN_DATA),
     ("an rm under plugins/data is recorded as a remove",
-     post(bash("rm " + PLUGIN_DATA, cwd=CWD)), "allow", ["remove"], PLUGIN_DATA),
+     post(bash("rm " + q(PLUGIN_DATA), cwd=CWD)), "allow", ["remove"], PLUGIN_DATA),
     # --- the record's staples ---
     ("main edit logs exactly one edit",
      post(edit("Edit", os.path.join(CWD, "src", "app.py"), cwd=CWD)),
@@ -735,10 +860,10 @@ TELEMETRY = [
     ("scratch write is not logged",
      post(edit("Write", os.path.join(TMP, "scratch.txt"), cwd=CWD)), "allow", []),
     ("bash scratch redirect is not logged",
-     post(bash("echo x > " + os.path.join(TMP, "opulent-scratch.txt"), cwd=CWD)),
+     post(bash("echo x > " + q(os.path.join(TMP, "opulent-scratch.txt")), cwd=CWD)),
      "allow", []),
     ("bash write into plans is not logged",
-     post(bash("echo x > " + os.path.join(HOME, ".claude", "plans", "p.md"), cwd=CWD)),
+     post(bash("echo x > " + q(os.path.join(HOME, ".claude", "plans", "p.md")), cwd=CWD)),
      "allow", []),
     ("subagent edit is not logged",
      post(edit("Edit", PROJ, "a1")), "allow", []),
@@ -811,7 +936,7 @@ TELEMETRY = [
      post(bash("rm -rf build dist", cwd=CWD)), "allow", ["remove"],
      R(CWD, "build") + ", " + R(CWD, "dist")),
     ("rm of scratch is not logged",
-     post(bash("rm " + os.path.join(TMP, "x.tmp"), cwd=CWD)), "allow", []),
+     post(bash("rm " + q(os.path.join(TMP, "x.tmp")), cwd=CWD)), "allow", []),
     ("git reset --hard logs a remove",
      post(bash("git reset --hard", cwd=CWD)), "allow", ["remove"], "git reset --hard"),
     ("git clean logs a remove",
@@ -859,14 +984,14 @@ TELEMETRY = [
      post(bash("echo x >&2", cwd=CWD)), "allow", []),
     # --- git am is recorded like git apply ---
     ("git am of an ordinary patch logs the patched file",
-     post(bash("git am " + SRC_PATCH, cwd=CWD)), "allow", ["edit"], R(CWD, "src", "app.py")),
+     post(bash("git am " + q(SRC_PATCH), cwd=CWD)), "allow", ["edit"], R(CWD, "src", "app.py")),
     # --- prefixes: the wrapped command is recorded ---
     ("timeout-wrapped pytest logs exactly one test",
      post(bash("timeout 300 pytest -q", cwd=CWD)), "allow", ["test"],
      "timeout 300 pytest -q"),
     # --- touch value options are not targets ---
     ("touch -r records the stamped file only",
-     post(bash("touch -r " + SETTINGS + " stamp", cwd=CWD)), "allow", ["edit"],
+     post(bash("touch -r " + q(SETTINGS) + " stamp", cwd=CWD)), "allow", ["edit"],
      R(CWD, "stamp")),
     ("touch -d records the touched file, not the date",
      post(bash("touch -d '2020-01-01' x", cwd=CWD)), "allow", ["edit"], R(CWD, "x")),
@@ -915,37 +1040,37 @@ TELEMETRY = [
      R(CWD, "sub", "sub2", "f.txt")),
     # --- patch records: real stripped paths, resolved, no phantoms ---
     ("patched file is logged by its real stripped path",
-     post(bash("git apply -p1 " + SRC_PATCH, cwd=CWD)), "allow", ["edit"],
+     post(bash("git apply -p1 " + q(SRC_PATCH), cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py")),
     ("a deletion is logged by the live side of the /dev/null pair",
-     post(bash("git apply -p1 " + DELETE_PATCH, cwd=CWD)), "allow", ["edit"],
+     post(bash("git apply -p1 " + q(DELETE_PATCH), cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "old.py")),
     ("-p0 strips nothing, so the whole header path is the record",
-     post(bash("patch -p0 < " + BARE_PATCH, cwd=CWD)), "allow", ["edit"],
+     post(bash("patch -p0 < " + q(BARE_PATCH), cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py")),
     ("git apply with no -p is judged at git's documented -p1",
-     post(bash("git apply " + SRC_PATCH, cwd=CWD)), "allow", ["edit"],
+     post(bash("git apply " + q(SRC_PATCH), cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py")),
     ("patch with no -p records the fan-out minus a/-phantoms",
-     post(bash("patch < " + SRC_PATCH, cwd=CWD)), "allow", ["edit"],
+     post(bash("patch < " + q(SRC_PATCH), cwd=CWD)), "allow", ["edit"],
      R(CWD, "src", "app.py") + ", " + R(CWD, "app.py")),
     ("a deep header is capped to the two levels real tools use",
-     post(bash("patch < " + DEEP_PATCH, cwd=CWD)), "allow", ["edit"],
+     post(bash("patch < " + q(DEEP_PATCH), cwd=CWD)), "allow", ["edit"],
      R(CWD, *(_DEEP_PARTS + ["f.py"]))[:120]),
     ("every patch on the line is read, not just the last",
-     post(bash("git apply -p1 " + SRC_PATCH + " " + SRC2_PATCH, cwd=CWD)),
+     post(bash("git apply -p1 " + q(SRC_PATCH) + " " + q(SRC2_PATCH), cwd=CWD)),
      "allow", ["edit"], R(CWD, "src", "app.py") + ", " + R(CWD, "src", "other.py")),
     ("a rename is logged from its diff --git line, both sides",
-     post(bash("git apply -p1 " + SRC_RENAME_PATCH, cwd=CWD)),
+     post(bash("git apply -p1 " + q(SRC_RENAME_PATCH), cwd=CWD)),
      "allow", ["edit"], R(CWD, "src", "old.py") + ", " + R(CWD, "src", "new.py")),
     ("a quoted header path is recorded unquoted",
-     pre(bash("git apply -p1 " + QUOTED_RENAME_PATCH, cwd=CWD)),
+     pre(bash("git apply -p1 " + q(QUOTED_RENAME_PATCH), cwd=CWD)),
      "deny", ["deny"], "control:" + R(CWD, ".claude", "hooks", "my file.py")),
     ("a quoted ---/+++ pair is recorded unquoted",
-     post(bash("git apply -p1 " + QUOTED_PAIR_PATCH, cwd=CWD)),
+     post(bash("git apply -p1 " + q(QUOTED_PAIR_PATCH), cwd=CWD)),
      "allow", ["edit"], R(CWD, "sp file.py")),
     ("a spaced rename records the two paths it moves and no others",
-     post(bash("git apply -p1 " + SPACED_SRC_RENAME_PATCH, cwd=CWD)),
+     post(bash("git apply -p1 " + q(SPACED_SRC_RENAME_PATCH), cwd=CWD)),
      "allow", ["edit"],
      R(CWD, "src", "my file.py") + ", " + R(CWD, "src", "your file.py")),
     # --- the payload's cwd resolves the record and the judgment ---
@@ -1022,6 +1147,48 @@ TELEMETRY = [
     ("a real directory named a/ is recorded",
      post(bash("cp x.py a/foo && cp y.py foo", cwd=CWD)), "allow", ["edit"],
      R(CWD, "a", "foo") + ", " + R(CWD, "foo")),
+    # --- MSYS drive spellings, and the POSIX path they must not steal ---
+    # On Windows `/c/Users/x` is Git Bash's spelling of C:\Users\x; on POSIX it
+    # is an ordinary directory and has to stay one. The row asserts the
+    # PLATFORM's own reading, which is the only way it can be wrong in exactly
+    # one direction on each.
+    ("an MSYS-spelled ordinary path is an edit at the platform's own reading",
+     post(bash("echo x > " + MSYS_NOTES, cwd=CWD)), "allow", ["edit"],
+     (os.path.normpath("C:\\Users\\x\\notes.txt")
+      if sys.platform == "win32" else MSYS_NOTES)),
+    # --- PowerShell: it decides on text and records `unparsed` ---
+    ("PowerShell git status is allowed and unlogged",
+     post(powershell("git status", cwd=CWD)), "allow", []),
+    ("PowerShell Out-File to build.log is allowed and logged unparsed",
+     post(powershell("'x' | Out-File build.log", cwd=CWD)), "allow", ["unparsed"],
+     "powershell: 'x' | Out-File build.log"),
+    # A write-shaped token inside a string still records `unparsed`, and that
+    # is the honest answer rather than a bug worked around: there is no
+    # PowerShell parser here to tell a mention from a run, and a false
+    # `unparsed` costs one audit line — never a denial.
+    ("PowerShell mentioning Set-Content in a string still records unparsed",
+     post(powershell("Write-Output 'use Set-Content to write files'", cwd=CWD)),
+     "allow", ["unparsed"],
+     "powershell: Write-Output 'use Set-Content to write files'"),
+    # TEST_RE is a textual pattern, so it reads a PowerShell command line as
+    # willingly as a Bash one.
+    ("cargo test through PowerShell logs exactly one test",
+     post(powershell("cargo test", cwd=CWD)), "allow", ["test"], "cargo test"),
+    ("PowerShell Remove-Item records unparsed, not remove",
+     post(powershell("Remove-Item -Recurse build", cwd=CWD)), "allow", ["unparsed"],
+     "powershell: Remove-Item -Recurse build"),
+    ("subagent PowerShell records nothing",
+     post(powershell("Set-Content x.txt -Value y", "a1", cwd=CWD)), "allow", []),
+    # The deciding half writes a line only when it is the one refusing.
+    ("PreToolUse PowerShell write records nothing",
+     pre(powershell("'x' | Out-File build.log", cwd=CWD)), "allow", []),
+    ("PowerShell control-plane denial logs exactly one deny",
+     pre(powershell("Set-Content " + q(SETTINGS) + " -Value x", cwd=CWD)), "deny",
+     ["deny"], "control:" + SETTINGS),
+    # The doctor's canary, so /opulent:doctor step 4b has something to read.
+    ("the PowerShell canary is denied and logged as a probe",
+     pre(powershell("New-Item opulent-doctor-canary", cwd=CWD)), "deny", ["probe"],
+     "canary:" + R(CWD, "opulent-doctor-canary")),
 ]
 
 for case in TELEMETRY:
@@ -1077,11 +1244,13 @@ for desc, payload, env_extra, want_text in REASONS:
 # to rewrite or delete, whichever tool reaches for it.
 LOG_GUARD_CASES = [
     ("truncating the routing log is denied and logged",
-     lambda p: bash("> " + p, cwd=CWD)),
+     lambda p: bash("> " + q(p), cwd=CWD)),
     ("rm of the routing log is denied and logged",
-     lambda p: bash("rm " + p, cwd=CWD)),
+     lambda p: bash("rm " + q(p), cwd=CWD)),
     ("Write of the routing log is denied and logged",
      lambda p: edit("Write", p, cwd=CWD)),
+    ("PowerShell write to the routing log is denied and logged",
+     lambda p: powershell("Set-Content " + q(p) + " -Value x", cwd=CWD)),
 ]
 
 for desc, make in LOG_GUARD_CASES:
@@ -1092,7 +1261,7 @@ for desc, make in LOG_GUARD_CASES:
     env = {"OPULENT_LOG": tf.name}
     reason = run(payload, env, field="permissionDecisionReason")
     try:
-        with open(tf.name) as fh:
+        with open(tf.name, encoding="utf-8") as fh:
             entries = [json.loads(line) for line in fh if line.strip()]
     finally:
         os.unlink(tf.name)
@@ -1106,14 +1275,47 @@ for desc, make in LOG_GUARD_CASES:
     print(f"{status}  {desc}: expected=deny/['deny']/log:{norm} "
           f"got={reason!r}/{events or 'nothing'}/{details or 'nothing'}")
 
+# One-off checks that do not fit a table, counted here so the total is the
+# number of assertions that actually ran — a platform-gated case that is
+# skipped is printed as SKIP and is not counted as a pass it never earned.
+extra_checks = 0
+
+
+def extra(desc, ok, want, got_):
+    """Score and print one standalone check, in the tables' own format."""
+    global failures, extra_checks
+    extra_checks += 1
+    if not ok:
+        failures += 1
+    print(f"{'PASS' if ok else 'FAIL'}  {desc}: expected={want} got={got_}")
+
+
+def fresh(path):
+    """`path` with any previous run's file removed. The log-guard checks below
+    point OPULENT_LOG at a fixed name under HOME and then assert the event
+    list by EQUALITY, and the hook APPENDS — so one leftover file (an
+    interrupted run, a hand probe using the same name) makes the next run fail
+    on a line it did not write. Observed exactly once, from a hand probe."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+    return path
+
+
 # --- log-guard spellings: `~` and `..` must not slide past the guard, and a
 # `~`-spelled OPULENT_LOG must actually receive lines (it used to write
 # nothing, silently — open("~/...") is not expansion).
 TILDE_LOG = "~/opulent-selftest-guard.jsonl"
-TILDE_REAL = os.path.expanduser(TILDE_LOG)
+# normpath, because the hook normalises and this expectation must be the same
+# string it produces: on Windows expanduser returns `C:\Users\me/guard.jsonl`,
+# mixed separators and all, and the un-normalised spelling matched nothing the
+# hook could ever say. The hook was right; the fixture was not. NOT quoted in
+# the command below either — quoting a `~` is how you stop Bash expanding it.
+TILDE_REAL = fresh(os.path.normpath(os.path.expanduser(TILDE_LOG)))
 got = run(bash("rm " + TILDE_LOG, cwd=CWD), {"OPULENT_LOG": TILDE_LOG})
 try:
-    with open(TILDE_REAL) as fh:
+    with open(TILDE_REAL, encoding="utf-8") as fh:
         tilde_entries = [json.loads(line) for line in fh if line.strip()]
 except OSError:
     tilde_entries = []
@@ -1122,32 +1324,94 @@ finally:
         os.unlink(TILDE_REAL)
     except OSError:
         pass
-ok = (got == "deny" and [e.get("event") for e in tilde_entries] == ["deny"]
-      and ("log:" + TILDE_REAL) in [e.get("detail") for e in tilde_entries])
-status = "PASS" if ok else "FAIL"
-if status == "FAIL":
-    failures += 1
-print(f"{status}  a ~-spelled routing log is guarded and written: "
-      f"expected=deny/['deny']/log:{TILDE_REAL} got={got}/{tilde_entries or 'nothing'}")
+extra("a ~-spelled routing log is guarded and written",
+      got == "deny" and [e.get("event") for e in tilde_entries] == ["deny"]
+      and ("log:" + TILDE_REAL) in [e.get("detail") for e in tilde_entries],
+      f"deny/['deny']/log:{TILDE_REAL}", f"{got}/{tilde_entries or 'nothing'}")
 
 DOTDOT_DIR = tempfile.mkdtemp(prefix="opulent-guard-")
 atexit.register(shutil.rmtree, DOTDOT_DIR, True)
 DOTDOT_LOG = os.path.join(DOTDOT_DIR, "guard.jsonl")
-open(DOTDOT_LOG, "w").close()
+open(DOTDOT_LOG, "w", encoding="utf-8").close()
 dotdot_spelling = DOTDOT_DIR + "/sub/../guard.jsonl"
-got = run(bash("echo x > " + dotdot_spelling, cwd=CWD), {"OPULENT_LOG": DOTDOT_LOG})
-with open(DOTDOT_LOG) as fh:
+got = run(bash("echo x > " + q(dotdot_spelling), cwd=CWD), {"OPULENT_LOG": DOTDOT_LOG})
+with open(DOTDOT_LOG, encoding="utf-8") as fh:
     dot_entries = [json.loads(line) for line in fh if line.strip()]
-ok = (got == "deny" and [e.get("event") for e in dot_entries] == ["deny"])
-status = "PASS" if ok else "FAIL"
-if status == "FAIL":
-    failures += 1
-print(f"{status}  a ..-spelled write to the routing log is denied: "
-      f"expected=deny/['deny'] got={got}/{dot_entries or 'nothing'}")
+extra("a ..-spelled write to the routing log is denied",
+      got == "deny" and [e.get("event") for e in dot_entries] == ["deny"],
+      "deny/['deny']", f"{got}/{dot_entries or 'nothing'}")
 
-LOG_GUARD_EXTRA = 2
+# --- the record's half of the unquoted-backslash claim. The CASES row above
+# pins the decision (allow); this pins that the audit line does not CLAIM a
+# control-plane file was touched. A NOT-contains assertion is the whole reason
+# this lives outside the telemetry table, which checks membership.
+#
+# Segments, not a substring: what Bash hands over is
+# `C:Usersx.claudesettings.json`, whose BASENAME happens to contain the
+# characters `.claude` while naming no .claude directory at all. The claim
+# under test is "this is not a control-plane path", and a control-plane path
+# is one with a `.claude` COMPONENT — so that is what is checked.
+got, entries = logged(post(bash("echo x > " + WIN_UNQUOTED, cwd=CWD)))
+details = [e.get("detail") or "" for e in entries]
+segments = [s for d in details for s in d.replace("\\", "/").split("/")]
+extra("an unquoted backslash path is never recorded as a .claude path",
+      got == "allow" and ".claude" not in segments,
+      "allow/no detail with a .claude path component",
+      f"{got}/{details or 'nothing'}")
+
+# --- OPULENT_LOG=os.devnull means NO log, and the guard must not turn "no
+# log" into a real file to defend. os.devnull is `nul` on Windows and `nul` is
+# not absolute, so the anchor-to-HOME step used to make it ~/nul and guard
+# that: a write to ~/nul was refused as if it were the audit record. The
+# observable half of the bug is that false denial — a line written to ~/nul
+# goes to the null device on Windows, so "nothing was logged" is not something
+# any check can see from outside.
+_devnull_env = {"OPULENT_LOG": os.devnull}
+got = run(bash("echo x > /dev/null", cwd=CWD), _devnull_env)
+extra("a redirect to /dev/null is allowed when os.devnull IS the log",
+      got == "allow", "allow", got)
+# The path the anchor-to-HOME step used to invent, written the way a Bash
+# command would: with the fix in place there is no log here to guard.
+_devnull_under_home = os.path.join(HOME, os.devnull)
+got = run(bash("echo x > " + q(_devnull_under_home), cwd=CWD), _devnull_env)
+extra("os.devnull as the log guards nothing under HOME",
+      got == "allow", "allow", got)
+
+# --- the log self-guard reaches MSYS's drive spelling (Windows only). In Git
+# Bash `/c/Users/...` IS `C:\Users\...`, and it is the spelling that shell
+# hands out; is_control_plane reads segments and never cared, but the log
+# guard compares a RESOLVED absolute path, and `/c/...` used to normalise to
+# `\c\...` — which equals nothing, so the audit record was rewritable through
+# the shell's own default. Skipped elsewhere, out loud: on POSIX `/c/Users` is
+# an ordinary directory and must stay one (the telemetry row above pins that).
+if sys.platform == "win32":
+    MSYS_LOG = fresh(os.path.join(HOME, "opulent-selftest-msys.jsonl"))
+    if MSYS_LOG[1:3] != ":\\":
+        print(f"SKIP  MSYS-spelled routing log is guarded: HOME ({HOME}) is not "
+              f"on a drive letter, so there is no /x/ spelling of it")
+    else:
+        msys_spelling = "/" + MSYS_LOG[0].lower() + "/" + MSYS_LOG[3:].replace("\\", "/")
+        got = run(bash("echo x > " + msys_spelling, cwd=CWD), {"OPULENT_LOG": MSYS_LOG})
+        try:
+            with open(MSYS_LOG, encoding="utf-8") as fh:
+                msys_entries = [json.loads(line) for line in fh if line.strip()]
+        except OSError:
+            msys_entries = []
+        finally:
+            try:
+                os.unlink(MSYS_LOG)
+            except OSError:
+                pass
+        want_detail = "log:" + os.path.normpath(MSYS_LOG)
+        extra("an MSYS-spelled routing log is guarded",
+              got == "deny" and [e.get("event") for e in msys_entries] == ["deny"]
+              and want_detail in [e.get("detail") for e in msys_entries],
+              f"deny/['deny']/{want_detail}", f"{got}/{msys_entries or 'nothing'}")
+else:
+    print(f"SKIP  MSYS-spelled routing log is guarded: {sys.platform} has no "
+          f"MSYS drive spelling, and /c/Users there is an ordinary directory")
 
 total = (len(CASES) + len(TELEMETRY) + len(REASONS) + len(LOG_GUARD_CASES)
-         + LOG_GUARD_EXTRA)
+         + extra_checks)
 print(f"\n{total - failures}/{total} passed")
 sys.exit(1 if failures else 0)
