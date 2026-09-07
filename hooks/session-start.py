@@ -25,8 +25,13 @@ rung above it to reach for. What used to decide between two lanes now decides ho
 write the brief. When a named hazard is in scope — concurrency, auth or crypto, a data migration,
 money, or a public contract others depend on — say which one, say what must not break, and name the
 check that would catch it if it did. The lane cannot ask you a follow-up question, so a hazard you
-did not mention is a hazard it does not know about. If its output fails review or tests, the answer
-is a better brief or your own hands, not a bigger lane — see Escalation at the end.
+did not mention is a hazard it does not know about. If its output fails review or tests, the failure
+is almost always something the lane did not know rather than something it did not think hard enough
+about. Read what came back, work out which fact was missing from the brief, and send it again
+carrying that fact — a lane told what it was missing can usually solve what it just failed. Effort
+does not close an information gap; the same brief at a higher rung would only buy a more elaborate
+wrong answer, which is the deeper reason there is no higher rung. If the missing fact is one you do
+not have either, that is Escalation at the end.
 
 Documentation is YOURS and is not delegated. You made the design decisions, so you are the only
 one who can say why they went this way rather than the other — a lane briefed on the outcome writes

@@ -10,6 +10,37 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.22.0 — 2026-09-04
+
+**The failure instruction becomes a procedure.** 0.21.0 removed the escalation
+rung and told the architect that a failed lane needs "a better brief or your
+own hands" — true, and vague at exactly the moment it matters. The policy now
+says what to actually do: read what came back, work out which fact was missing
+from the brief, and send it again carrying that fact.
+
+This comes from watching the loop rather than reasoning about it. In practice a
+review failure is diagnosed by the architect, which then tells the lane what it
+did not know, and the lane solves what it just failed. Tasks fail because some
+aspect of them was not visible to the executor, not because the executor did
+not try hard enough.
+
+That is also the deeper reason there is no higher rung, and a better one than
+0.21.0 gave. **Effort does not close an information gap.** The same brief at max
+effort does not discover the missing fact; it thinks harder about the wrong
+shape of the problem and returns a more elaborately wrong answer. So the retry
+rung was not merely redundant with what the architect already does — it was
+pointed at the wrong axis, answering "think harder" to a failure whose content
+was "you did not know X".
+
+It extends the argument this plugin already made from the other direction.
+Over-effort on bounded work returns worse code because effort it cannot spend
+on the problem it spends on structure the problem never needed; over-effort on
+under-specified work returns worse code because the gap was never made of
+effort. Two routes to one conclusion.
+
+Escalation keeps its pointer and gains a sharper trigger: it is for when the
+missing fact is one the architect does not have either.
+
 ## opulent 0.21.0 — 2026-09-04
 
 **One implementation lane.** `opulent:coder-max` is removed and `opulent:coder`
