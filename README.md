@@ -53,17 +53,16 @@ Here is exactly where your tasks go:
 | Work | Agent | Model & Effort |
 | :--- | :--- | :--- |
 | **Architecture, orchestration, docs, UI verification** | *Main loop (Architect)* | Your session model — set with `/model` (Opus 5 or Fable) |
-| **Complex implementation (the default)** | `opulent:coder` | Opus, Effort: xHigh |
-| **Implementation touching a named hazard** | `opulent:coder-max` | Opus, Effort: Max |
+| **All complex implementation** | `opulent:coder` | Opus, Effort: xHigh |
 | **Routine edits, boilerplate** | `opulent:mechanic` | Sonnet, Effort: xHigh |
 | **Tests, builds, linters** | `opulent:test-runner` | Sonnet, Effort: High (no edit tools) |
 | **Locating code and structure** | *Built-in `Explore` agent* | Claude Code's own read-only searcher |
 
-*A lane whose definition lists no tools (`opulent:coder`, `opulent:coder-max`, `opulent:mechanic`) inherits all tools.*
+*A lane whose definition lists no tools (`opulent:coder`, `opulent:mechanic`) inherits all tools.*
 
-**Implementation is a binary choice.** `opulent:coder` at `xhigh` — Anthropic's recommended setting for coding — is the answer for every non-trivial change. The single thing that moves work off it is a **named hazard**: concurrency, auth or crypto, a data migration, money, or a public contract others depend on. That, and only that, is what `opulent:coder-max` is for, along with a resubmission after `opulent:coder` failed review or tests.
+**Implementation isn't a choice.** `opulent:coder` at `xhigh` — Anthropic's recommended setting for coding — takes every non-trivial change. There is no rung above it and nothing to escalate to, which means there is no routing decision left to get wrong.
 
-**Max is not the safe choice.** Escalation is priced here as a quality risk rather than a bill, because that is what it is: effort above the work returns *worse* code, not safer code, since what it cannot spend on the problem it spends on structure the problem never needed. Guidance that only ever priced over-effort in tokens made max the rational reflex, and the reflex is the failure mode. Feeling hard is not a hazard, and neither is caring about the outcome. The mistake is cheap in one direction only — under-reaching is visible and recoverable, so if coder's output fails review or tests, resubmit to `opulent:coder-max` and say that is why.
+**Hazards moved from routing to briefing.** Earlier versions escalated concurrency, auth or crypto, data migrations, money and public contracts to a `max`-effort second lane. That lane is gone, but the list isn't — it now tells you when a brief has to be written carefully rather than which agent to spawn. Name the hazard, say what must not break, and name the check that would catch it if it did; the lane can't ask you a follow-up question, so a hazard you didn't mention is one it doesn't know about. If its output fails review, the answer is a better brief or your own hands — not a bigger lane.
 
 **Two jobs are deliberately not lanes.** The architect keeps both, for the same reason.
 

@@ -15,18 +15,18 @@ CONTEXT = """# Model routing policy (opulent plugin)
 
 The main conversation is the architect/orchestrator only. Delegate execution:
 
-- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh). Give it a full spec: files, approach, constraints. This is the implementation lane; the only thing that moves work off it is a named hazard.
-- Implementation touching a named hazard -> `opulent:coder-max` agent (Opus, effort max). The hazards are concurrency, auth or crypto, a data migration, money, and a public contract others depend on — name which one in the brief. Also where to resubmit when `opulent:coder` failed review or tests.
+- Complex implementation -> `opulent:coder` agent (Opus, effort xhigh). Give it a full spec: files, approach, constraints. It is the only implementation lane.
 - Routine/mechanical edits -> `opulent:mechanic` agent (Sonnet). Give exact instructions.
 - Tests, builds, linters, typechecks -> `opulent:test-runner` agent (Sonnet). Delegate anything beyond a quick one-off check.
 - Reading/searching/exploration -> the built-in `Explore` agent for anything beyond a single known file.
 
-Implementation is a binary choice, and `opulent:coder` is the answer unless a named hazard is in
-scope. Max is not the safer default but the worse one: effort above the work returns WORSE code,
-because what it cannot spend on the problem it spends on structure the problem never needed.
-Feeling hard is not a hazard, and neither is caring about the outcome. The mistake is cheap in one
-direction only — under-reaching is visible and recoverable, so if coder's output fails review or
-tests, resubmit to `opulent:coder-max` and say that is why.
+Implementation is not a choice: every non-trivial change goes to `opulent:coder`, and there is no
+rung above it to reach for. What used to decide between two lanes now decides how carefully you
+write the brief. When a named hazard is in scope — concurrency, auth or crypto, a data migration,
+money, or a public contract others depend on — say which one, say what must not break, and name the
+check that would catch it if it did. The lane cannot ask you a follow-up question, so a hazard you
+did not mention is a hazard it does not know about. If its output fails review or tests, the answer
+is a better brief or your own hands, not a bigger lane — see Escalation at the end.
 
 Documentation is YOURS and is not delegated. You made the design decisions, so you are the only
 one who can say why they went this way rather than the other — a lane briefed on the outcome writes

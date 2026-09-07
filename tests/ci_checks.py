@@ -91,13 +91,11 @@ for m in members():
             f"highest version present — entries must be newest-first")
     print(f"released in {CHANGELOG}: {m.name} {manifest['version']}")
 
-# Implementation is two files carrying one charter, differing only in the
-# effort they run at. Duplication that nothing holds in place drifts silently —
-# the variant keeps the charter it was copied from only for as long as someone
-# remembers to edit both files. This is that someone.
+# Implementation is one file since 0.21.0. The charter-sync machinery that used
+# to hold a second copy in step went with the copy; what remains is the pair of
+# pins on the surviving file — the effort it runs at, and the charter its body
+# has to actually carry.
 ORIGINAL = "agents/coder.md"
-VARIANTS = {"coder-max": "max"}
-RUNG_FIELDS = {"name", "description", "effort"}
 
 
 def agent_parts(path):
@@ -164,42 +162,15 @@ if front.get("effort") != "xhigh":
         f"{ORIGINAL}: effort is {front.get('effort')!r}, expected 'xhigh' — "
         f"the default implementation lane is xhigh, Anthropic's recommended "
         f"coding setting")
-# The variant is checked against THIS body, which makes the sync mutual and
-# anchored to nothing: two empty files agree with each other perfectly. So the
-# file the variant is measured from is pinned to the charter it carries, and
-# "both gutted" can no longer satisfy the sync.
+# A lane whose body says nothing briefs nobody, and nothing else in this file
+# would notice: every other check reads frontmatter. This is the one assertion
+# that the charter is still in there.
 CHARTER = b"implementation specialist"
 if CHARTER not in body:
     raise SystemExit(
-        f"{ORIGINAL}: the body never says {CHARTER.decode()!r} — the variant is "
-        f"synced to this file, so a charter emptied here would pass the sync "
-        f"and leave both lanes briefing nobody")
-for variant, rung in sorted(VARIANTS.items()):
-    path = f"agents/{variant}.md"
-    v_front, v_body = agent_parts(path)
-    if v_body != body:
-        raise SystemExit(
-            f"{path}: body differs from {ORIGINAL} — both implementation lanes "
-            f"carry the same charter verbatim and may differ only in frontmatter")
-    drift = sorted(k for k in set(front) | set(v_front)
-                   if front.get(k) != v_front.get(k))
-    if set(drift) - RUNG_FIELDS:
-        raise SystemExit(
-            f"{path}: frontmatter differs from {ORIGINAL} in {', '.join(drift)} — "
-            f"only {', '.join(sorted(RUNG_FIELDS))} may differ")
-    if v_front.get("name") != variant:
-        raise SystemExit(
-            f"{path}: name is {v_front.get('name')!r}, expected {variant!r} — "
-            f"the policy spells that name out by hand")
-    # Permitted to differ is not the same as required to differ. A variant at
-    # coder's own effort is byte-identical to it in every way that matters and
-    # buys nothing — the whole point of the file is the effort it sits at.
-    if v_front.get("effort") != rung:
-        raise SystemExit(
-            f"{path}: effort is {v_front.get('effort')!r}, expected {rung!r} — "
-            f"that is the effort this lane exists to occupy")
-    print(f"charter in sync with {ORIGINAL}: {path} ({', '.join(drift)} differ)")
-
+        f"{ORIGINAL}: the body never says {CHARTER.decode()!r} — the only "
+        f"implementation lane would brief nobody")
+print(f"charter intact: {ORIGINAL}")
 hook = os.path.join(REPO, "hooks", "session-start.py")
 
 # The lane roster, pinned across every surface that names it. Derived from
@@ -214,9 +185,9 @@ for fn in sorted(os.listdir(os.path.join(REPO, "agents"))):
     if not fr.get("name") or not fr.get("model"):
         raise SystemExit(f"agents/{fn}: frontmatter must carry name and model")
     AGENTS[fr["name"]] = fr["model"].strip().lower()
-if len(AGENTS) != 4:
+if len(AGENTS) != 3:
     raise SystemExit(
-        f"agents/: expected the four lane definitions, found {len(AGENTS)}: "
+        f"agents/: expected the three lane definitions, found {len(AGENTS)}: "
         f"{', '.join(sorted(AGENTS))}")
 # Haiku left with the scout lane in 0.15.0, and a lane that quietly reappeared
 # on it would be a third tier the policy never mentions and the README never
@@ -234,9 +205,9 @@ with open(os.path.join(REPO, "commands", "doctor.md"), encoding="utf-8") as fh:
 with open(os.path.join(REPO, "README.md"), encoding="utf-8") as fh:
     readme_text = fh.read()
 # Matched WITH its backticks, which is how all three surfaces render a lane
-# name. Bare, `opulent:coder` is a substring of `opulent:coder-max`, so the
-# default lane could be deleted from any of these documents and go on being
-# "found" by the coder-max row sitting beside it.
+# name. The delimiters outlived the lane that made them load-bearing —
+# `opulent:coder` was a substring of `opulent:coder-max` until 0.21.0 — and
+# they stay, because the next lane sharing a prefix would reopen that hole.
 for name in sorted(AGENTS):
     lane = "`opulent:" + name + "`"
     for where, text in (("hooks/session-start.py CONTEXT", CONTEXT),
@@ -301,17 +272,9 @@ if out.returncode != 0:
 payload = json.loads(out.stdout)
 context = payload["hookSpecificOutput"]["additionalContext"]
 plain_lane = lane_line(context, "session-start")
-# Delimited, because `"opulent:coder" in ...` is a substring of coder-max: an
-# undelimited needle is satisfied by a lane line pointing at `opulent:coder-max`,
-# which is the most expensive lane in the cheapest circumstance — the worst
-# failure a cost-routing plugin has.
 if "`opulent:coder`" not in plain_lane:
     raise SystemExit(
         f"session-start: the implementation lane is not `opulent:coder`: "
-        f"{plain_lane!r}")
-if "opulent:coder-max" in plain_lane:
-    raise SystemExit(
-        f"session-start: the default implementation lane is the hazard lane: "
         f"{plain_lane!r}")
 print("session-start emits valid JSON with routing policy")
 

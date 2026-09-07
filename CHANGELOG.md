@@ -10,6 +10,41 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.21.0 — 2026-09-04
+
+**One implementation lane.** `opulent:coder-max` is removed and `opulent:coder`
+at xhigh takes every non-trivial change. There is no rung above it, which means
+there is no routing decision left to get wrong — the question the ladder
+existed to answer has stopped being asked.
+
+The retry path goes with it, two messages after it was deliberately kept. That
+is worth stating plainly rather than letting the tag list imply a smooth
+progression: a failed `opulent:coder` attempt no longer has a bigger lane to
+resubmit to, and the recovery is the Escalation paragraph that was always at
+the end of the policy — say so plainly, and take it to a stronger model in a
+dedicated session. That is a worse recovery for the cases where a second, more
+expensive attempt would have worked, and a better one for the far more common
+case where the real problem is a brief with a hole in it.
+
+**Hazards are demoted from routing to briefing.** Concurrency, auth or crypto,
+data migrations, money and public contracts no longer select an agent, because
+there is only one. The list survives because it was never really about routing:
+it is the set of things whose failure is expensive and quiet, and the useful
+instruction was always to write the brief more carefully when one is in scope.
+So the policy now asks for the hazard named, what must not break, and the check
+that would catch it — a lane cannot ask a follow-up question, so a hazard the
+brief omits is one it does not know about.
+
+**The charter-sync machinery is gone from CI.** It existed to hold two
+duplicate agent files in step, and there is no duplicate now. What survives is
+the pair of pins on the file that remains: the xhigh effort, and an assertion
+that the body still carries the charter at all — every other check in that file
+reads frontmatter, so nothing else would notice a lane briefing nobody.
+
+The backtick-delimited lane matching stays, though the lane that made it
+load-bearing is gone: `opulent:coder` was a substring of `opulent:coder-max`
+until today, and the next lane sharing a prefix would reopen the same hole.
+
 ## opulent 0.20.0 — 2026-09-04
 
 **The record is now of outcomes, not attempts.** Until now the routing hook

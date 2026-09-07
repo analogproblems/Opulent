@@ -480,7 +480,7 @@ CASES = [
     ("OPULENT_OFF=false enforces",    edit("Write", SETTINGS), "deny", {"OPULENT_OFF": "false"}),
     ("OPULENT_OFF=1 no longer disables", edit("Write", SETTINGS), "deny", {"OPULENT_OFF": "1"}),
     ("OPULENT_ECO no longer caps",    task("opulent:coder"),   "allow", {"OPULENT_ECO": "1"}),
-    ("OPULENT_CODEX no longer closes", task("opulent:coder-max"), "allow", {"OPULENT_CODEX": "1"}),
+    ("OPULENT_CODEX no longer closes", task("opulent:coder"),     "allow", {"OPULENT_CODEX": "1"}),
     # A named pipe blocks open() forever; the size cap bounds how much is read,
     # not whether the read returns. isfile() rejects it, and the ERROR() a hang
     # would produce is what this case is really watching for.
@@ -605,7 +605,7 @@ CASES = [
     ("subagent Task->general",       task("general-purpose", "a3"),                     "allow"),
     ("subagent Task->Explore",       task("Explore", "a5"),                             "allow"),
     # --- the ladder is two lanes now, and both spawn freely ---
-    ("main Task->coder-max",         task("opulent:coder-max"),                         "allow"),
+    ("main Task->coder",             task("opulent:coder"),                             "allow"),
     ("main Task->mechanic",          task("opulent:mechanic"),                          "allow"),
     ("main Task->test-runner",       task("opulent:test-runner"),                       "allow"),
     # Retired lanes are not special-cased: an unregistered opulent:* name is an
@@ -763,8 +763,8 @@ TELEMETRY = [
     # right — but it must still leave a record. subagent_type is not
     # guaranteed to be a string; these pin what the log shows when it isn't.
     ("list subagent_type still logs a delegate",
-     post(task(["opulent:coder-max"])), "allow", ["delegate"],
-     "['opulent:coder-max']"),
+     post(task(["opulent:coder"])), "allow", ["delegate"],
+     "['opulent:coder']"),
     ("dict subagent_type still logs a delegate",
      post(task({"a": 1})), "allow", ["delegate"], "{'a': 1}"),
     # int already worked before this fix — _log's own str() coercion covered

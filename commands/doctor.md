@@ -12,12 +12,11 @@ failed.
    copy under `~/.claude/plugins/` and flag the anomaly.
 
 2. **Agents registered.** From your own available-agents list: are
-   `opulent:coder`, `opulent:coder-max`, `opulent:mechanic`, and
-   `opulent:test-runner` present? Name any that are missing. (Implementation is
-   a binary choice between the two coder lanes; there is no third. Exploration
-   uses the built-in `Explore` agent, and documentation and visual verification
-   both stay in the main loop — none of those is an Opulent lane, and none
-   needs a check here.)
+   `opulent:coder`, `opulent:mechanic`, and `opulent:test-runner` present?
+   Name any that are missing. (Implementation is one lane with no rung above
+   it. Exploration uses the built-in `Explore` agent, and documentation and
+   visual verification both stay in the main loop — none of those is an
+   Opulent lane, and none needs a check here.)
 
 3. **Policy injected.** Is the "Model routing policy (opulent plugin)" text
    present in your current session context? Yes means the SessionStart hook
