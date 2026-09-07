@@ -10,6 +10,32 @@ the earlier versions are not pinnable from this remote.
 Versions are pinnable via git tags in the form `{plugin}--v{version}`
 (e.g. `opulent--v0.11.0`).
 
+## opulent 0.23.0 — 2026-09-07
+
+**Review becomes a lane.** Until now the one judgment call the policy did not
+route was the last one before a merge: code review. Projects filled the gap with
+their own `code-reviewer` agent, and the copy found in the wild was pinned to
+Sonnet — written under a rule that treated every subagent the same, before this
+plugin drew the line between bounded execution and judgment. Review is judgment.
+`opulent:reviewer` runs on Opus at `high`, carries Read, Grep, Glob and Bash and
+no edit tools, because a reviewer that can fix stops reporting; its charter is
+the test-runner's stance turned on a diff — report every finding, labelled by
+confidence, and let the architect filter. It also checks what the ad-hoc
+reviewer had no rule for: that a red-then-green claim is real, and that a new
+test would fail against a broken implementation. `high` rather than `xhigh` is
+a starting point, not a measurement — review reads a diff once per change, and
+the seat is expected to change hands to a different reviewer model later.
+
+**Debugging stays split.** A project `debugger` agent — diagnose, fix, verify in
+one context — was the other candidate. It is not a lane, because its three
+steps already belong to three places: `opulent:test-runner` diagnoses, the
+architect decides, `opulent:coder` fixes with the diagnosis in its brief. The
+policy now says so in one paragraph, so the protocol travels in briefs instead
+of an agent definition.
+
+The roster check pins four lanes; the catch-all denial names the new one; the
+doctor lists it.
+
 ## opulent 0.22.0 — 2026-09-04
 
 **The failure instruction becomes a procedure.** 0.21.0 removed the escalation

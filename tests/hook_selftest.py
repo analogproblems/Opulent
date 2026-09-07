@@ -608,6 +608,7 @@ CASES = [
     ("main Task->coder",             task("opulent:coder"),                             "allow"),
     ("main Task->mechanic",          task("opulent:mechanic"),                          "allow"),
     ("main Task->test-runner",       task("opulent:test-runner"),                       "allow"),
+    ("main Task->reviewer",          task("opulent:reviewer"),                          "allow"),
     # Retired lanes are not special-cased: an unregistered opulent:* name is an
     # ordinary delegation the harness will reject on its own, and the hook
     # inventing a denial for it would be a second source of truth.
@@ -752,6 +753,9 @@ TELEMETRY = [
     ("Agent-tool delegation logs exactly one delegate",
      post({"tool_name": "Agent", "tool_input": {"subagent_type": "opulent:mechanic"}}),
      "allow", ["delegate"], "opulent:mechanic"),
+    ("Agent-tool delegation to the reviewer logs exactly one delegate",
+     post({"tool_name": "Agent", "tool_input": {"subagent_type": "opulent:reviewer"}}),
+     "allow", ["delegate"], "opulent:reviewer"),
     ("subagent Task logs nothing",
      post(task("opulent:coder", "a7")), "allow", []),
     ("a session id in the payload lands on the log line",

@@ -1048,7 +1048,7 @@ def main():
             deny("Routing policy: catch-all agents inherit the session model and "
                  "bypass lane routing. Delegate to an opulent lane "
                  "(opulent:coder, opulent:mechanic, "
-                 "opulent:test-runner), the built-in Explore agent for "
+                 "opulent:test-runner, opulent:reviewer), the built-in Explore agent for "
                  "read-only search, or another purpose-defined agent "
                  "instead.", "catchall:" + st)
         allow()

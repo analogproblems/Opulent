@@ -185,15 +185,16 @@ for fn in sorted(os.listdir(os.path.join(REPO, "agents"))):
     if not fr.get("name") or not fr.get("model"):
         raise SystemExit(f"agents/{fn}: frontmatter must carry name and model")
     AGENTS[fr["name"]] = fr["model"].strip().lower()
-if len(AGENTS) != 3:
+if len(AGENTS) != 4:
     raise SystemExit(
-        f"agents/: expected the three lane definitions, found {len(AGENTS)}: "
+        f"agents/: expected the four lane definitions, found {len(AGENTS)}: "
         f"{', '.join(sorted(AGENTS))}")
 # Haiku left with the scout lane in 0.15.0, and a lane that quietly reappeared
 # on it would be a third tier the policy never mentions and the README never
-# lists. Opus and Sonnet are the whole matrix now: two Opus coder lanes and two
-# Sonnet support lanes, with documentation and UI verification kept by the
-# architect rather than delegated at all.
+# lists. Opus and Sonnet are the whole matrix now: two Opus judgment lanes
+# (coder, reviewer) and two Sonnet execution lanes (mechanic, test-runner),
+# with documentation and UI verification kept by the architect rather than
+# delegated at all.
 stray = sorted(n for n, m in AGENTS.items() if m not in ("opus", "sonnet"))
 if stray:
     raise SystemExit(
